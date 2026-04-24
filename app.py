@@ -1,8 +1,8 @@
 """
-CyberMomo 灵魂快照 · 服务端
+灵魂快照 · 服务端
 - 托管 prototype-v0.4.html
 - /api/messages 代理到智谱 GLM-5（通过 dashscope Anthropic 兼容端点）
-- /api/log-generation 保存生成记录（consent=true 时）
+- /api/log-generation 保存生成记录
 - /api/log-feedback 保存用户反馈
 """
 import json
@@ -106,8 +106,6 @@ async def log_generation(req: Request):
     if not pool:
         return {"skipped": True, "reason": "no_database"}
     data = await req.json()
-    if not data.get("consent"):
-        return {"skipped": True, "reason": "no_consent"}
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """

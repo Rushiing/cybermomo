@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CyberMomo · 灵魂快照 v0.4</title>
+<title>灵魂快照 v0.4</title>
 <style>
   :root {
     --bg: #faf8f5;
@@ -208,13 +208,8 @@
 <!-- Screen 1: Welcome -->
 <div class="screen active" id="s-welcome">
   <h1>灵魂快照 <span style="color:var(--muted);font-size:14px">v0.4 · 内测原型</span></h1>
-  <p class="muted">这是 CyberMomo 灵魂快照的完整流程 demo：填基础信息 → 10 题问卷 → 生成你的人格档案 → 反馈。约 3-5 分钟。</p>
+  <p class="muted">完整流程 demo：填基础信息 → 10 题问卷 → 生成你的人格档案 → 反馈。约 3-5 分钟。</p>
   <p class="muted" style="margin-top:12px">模型：GLM-5 · 生成档案会跑 30-60 秒，辛苦等一下</p>
-
-  <label style="display:flex;align-items:flex-start;gap:10px;margin-top:22px;cursor:pointer;font-size:13px;color:var(--muted);line-height:1.6">
-    <input type="checkbox" id="consent" checked style="margin-top:4px;flex-shrink:0">
-    <span>同意把这次测试的问卷答案、生成的 .md、反馈内容保存到 CyberMomo 的数据库，仅用于产品迭代分析。不对外发布、不用于训练第三方模型。取消勾选则本次数据只在你的浏览器里。</span>
-  </label>
 
   <button onclick="go('s-basic')">开始</button>
 </div>
@@ -452,12 +447,12 @@ const QUESTIONS = [
 ];
 
 // ============= System Prompt =============
-const SYSTEM_PROMPT = `你是 CyberMomo 平台的「人格档案撰写者」。
+const SYSTEM_PROMPT = `你是本平台的「人格档案撰写者」。
 
 你的任务：根据用户提供的基础信息、问卷答案（含每题选项的原始文本）、8 维人格得分，为 TA 生成一份中文 .md 人格档案。这份档案会作为 TA 的 AI Agent 的用户层 system prompt，驱动 Agent 在社交场景中代替 TA 说话、互动。
 
-## 关于 CyberMomo
-CyberMomo 是 AI 先行的社交平台。用户不直接与其他人聊天，而是让各自的 Agent 先交流，双方 Agent 互相认可后才开启真人聊天。.md 就是 Agent 最核心的"TA 是谁"的输入。
+## 平台背景
+本平台是 AI 先行的社交平台。用户不直接与其他人聊天，而是让各自的 Agent 先交流，双方 Agent 互相认可后才开启真人聊天。.md 就是 Agent 最核心的"TA 是谁"的输入。
 
 ## 表达硬约束
 
@@ -563,7 +558,6 @@ const state = {
   supplement: {},
   scores: {},
   md: '',
-  consent: true,
   generationId: null,
 };
 
@@ -587,7 +581,6 @@ function startQuiz() {
 
   if (!nickname || !birthday || !gender) return alert('昵称 / 出生年月 / 性别必填');
 
-  state.consent = document.getElementById('consent').checked;
   state.basic = {
     nickname, birthday, gender, mbti: mbti || null,
     language: '中文',
@@ -746,7 +739,6 @@ async function generateMd() {
 
 async function logGeneration(input, md) {
   const payload = {
-    consent: state.consent,
     prompt_version: 'v0.2',
     quiz_version: 'v0.4',
     model: MODEL,
@@ -835,8 +827,8 @@ async function submitFeedback() {
   const fallbackEl = document.getElementById('fb-fallback');
   resultEl.style.display = 'block';
 
-  // 有 generation_id 且用户同意 consent 才尝试在线保存
-  if (state.generationId && state.consent) {
+  // 有 generation_id 就尝试在线保存
+  if (state.generationId) {
     try {
       const resp = await fetch('/api/log-feedback', {
         method: 'POST',
@@ -862,7 +854,6 @@ async function submitFeedback() {
       prompt_version: 'v0.2',
       quiz_version: 'v0.4',
       model: MODEL,
-      consent: state.consent,
     },
     tester: {
       nickname: state.basic.nickname,
@@ -876,7 +867,7 @@ async function submitFeedback() {
     generated_md: state.md,
     feedback: payload,
   };
-  titleEl.textContent = state.consent ? '线上保存失败，请手动发回' : '你选择了不保存——辛苦手动复制 JSON 发回给我';
+  titleEl.textContent = '线上保存失败，请手动发回';
   document.getElementById('fb-json').textContent = JSON.stringify(fallback, null, 2);
   fallbackEl.style.display = 'block';
   window.scrollTo(0, document.body.scrollHeight);
