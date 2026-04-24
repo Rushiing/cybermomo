@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberMomo · 灵魂快照 v0.4</title>
+<style>
+  :root {
+    --bg: #faf8f5;
+    --ink: #2a2a2a;
+    --muted: #6b6b6b;
+    --line: #e3dfd8;
+    --accent: #3d4451;
+    --accent-hover: #1f242b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    padding: 40px 20px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 620px;
+    margin: 0 auto;
+  }
+  .screen { display: none; }
+  .screen.active { display: block; animation: fadeIn .3s; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: .5px; }
+  h2 { font-size: 22px; margin: 0 0 16px; }
+  h3 { font-size: 16px; margin: 20px 0 10px; color: var(--muted); font-weight: 500; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .guide {
+    background: #fff4e6;
+    border-left: 3px solid #e6a55a;
+    padding: 14px 16px;
+    margin: 0 0 24px;
+    font-size: 14px;
+    border-radius: 4px;
+  }
+  label {
+    display: block;
+    margin: 16px 0 6px;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  input[type=text], input[type=date], input[type=number], select, textarea {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    padding: 10px 12px;
+    font-size: 15px;
+    font-family: inherit;
+    color: var(--ink);
+  }
+  input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 60px; }
+  .row { display: flex; gap: 12px; }
+  .row > * { flex: 1; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-size: 15px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-top: 20px;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  button.secondary:hover { color: var(--ink); border-color: var(--ink); background: transparent; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .options { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+  .option {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px 18px;
+    background: #fff;
+    cursor: pointer;
+    transition: border-color .15s, transform .1s;
+  }
+  .option:hover { border-color: var(--accent); }
+  .option:active { transform: scale(.995); }
+  .option-key {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    margin-right: 10px;
+  }
+  .progress {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+  }
+  .scenario {
+    font-size: 17px;
+    line-height: 1.7;
+    margin: 0 0 10px;
+    color: var(--ink);
+  }
+  .question {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--accent);
+    margin: 0 0 12px;
+  }
+  .md-output {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px 28px;
+    white-space: pre-wrap;
+    font-family: ui-monospace, "SF Mono", "Menlo", monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .scores {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: 20px 0;
+    font-size: 12px;
+  }
+  .score-cell {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 8px;
+    text-align: center;
+  }
+  .score-cell .name { color: var(--muted); }
+  .score-cell .val { font-size: 18px; font-weight: 600; margin-top: 4px; }
+  .spinner {
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    width: 36px; height: 36px;
+    animation: spin 1s linear infinite;
+    margin: 40px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .adjectives {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 20px 0;
+    justify-content: center;
+  }
+  .adj {
+    padding: 6px 12px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 13px;
+    color: var(--accent);
+    opacity: 0;
+    animation: popIn .4s forwards;
+  }
+  @keyframes popIn { to { opacity: 1; } }
+  .error {
+    background: #fee;
+    border-left: 3px solid #c66;
+    padding: 12px 14px;
+    border-radius: 4px;
+    font-size: 14px;
+    color: #933;
+    margin: 20px 0;
+  }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .feedback-json {
+    background: #1f242b;
+    color: #d8d4cc;
+    padding: 16px;
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- Screen 1: Welcome -->
+<div class="screen active" id="s-welcome">
+  <h1>灵魂快照 <span style="color:var(--muted);font-size:14px">v0.4 · 内测原型</span></h1>
+  <p class="muted">这是 CyberMomo 灵魂快照的完整流程 demo：填基础信息 → 10 题问卷 → 生成你的人格档案 → 反馈。约 3-5 分钟。</p>
+  <p class="muted" style="margin-top:12px">模型：GLM-5 · 生成档案会跑 30-60 秒，辛苦等一下</p>
+
+  <label style="display:flex;align-items:flex-start;gap:10px;margin-top:22px;cursor:pointer;font-size:13px;color:var(--muted);line-height:1.6">
+    <input type="checkbox" id="consent" checked style="margin-top:4px;flex-shrink:0">
+    <span>同意把这次测试的问卷答案、生成的 .md、反馈内容保存到 CyberMomo 的数据库，仅用于产品迭代分析。不对外发布、不用于训练第三方模型。取消勾选则本次数据只在你的浏览器里。</span>
+  </label>
+
+  <button onclick="go('s-basic')">开始</button>
+</div>
+
+<!-- Screen 2: Basic Info -->
+<div class="screen" id="s-basic">
+  <h2>基础信息</h2>
+  <p class="muted">这些信息会成为 .md 的"基本"段。字段少一个就多一分跳失——所以只问必要的。</p>
+
+  <label>昵称 <span class="muted">2-12 字</span></label>
+  <input type="text" id="in-nickname" maxlength="12" placeholder="">
+
+  <label>出生年月</label>
+  <input type="date" id="in-birthday">
+
+  <label>性别</label>
+  <select id="in-gender">
+    <option value="">请选择</option>
+    <option value="女">女</option>
+    <option value="男">男</option>
+    <option value="非二元">非二元</option>
+    <option value="不愿透露">不愿透露</option>
+  </select>
+
+  <label>MBTI <span class="muted">可选</span></label>
+  <select id="in-mbti">
+    <option value="">不填 / 不确定</option>
+    <option>INTJ</option><option>INTP</option><option>ENTJ</option><option>ENTP</option>
+    <option>INFJ</option><option>INFP</option><option>ENFJ</option><option>ENFP</option>
+    <option>ISTJ</option><option>ISFJ</option><option>ESTJ</option><option>ESFJ</option>
+    <option>ISTP</option><option>ISFP</option><option>ESTP</option><option>ESFP</option>
+  </select>
+
+  <button onclick="startQuiz()">下一步</button>
+</div>
+
+<!-- Screen 3: Quiz -->
+<div class="screen" id="s-quiz">
+  <div class="progress" id="progress">Q 1 / 10</div>
+  <div class="guide">选最接近你"第一反应"的那一个——<b>犹豫就是答案</b>，挑让你最想点的那个就对了。</div>
+  <p class="scenario" id="scenario"></p>
+  <p class="question" id="question"></p>
+  <div class="options" id="options"></div>
+  <button class="secondary" onclick="prevQuestion()" id="btn-prev" style="display:none">上一题</button>
+</div>
+
+<!-- Screen 4: Supplement -->
+<div class="screen" id="s-supplement">
+  <h2>小小补充一下 <span class="muted">· 可跳过</span></h2>
+
+  <label>🔥 最近想聊点什么？<span class="muted">（几个关键词，逗号隔开，不超过 5 个）</span></label>
+  <input type="text" id="in-wants" placeholder="例：哲学, 佛学, 自我认知">
+
+  <label>💬 对什么话题可以多聊两句？<span class="muted">（同上）</span></label>
+  <input type="text" id="in-cans" placeholder="例：AI, 旅行, 阅读">
+
+  <label>✍️ 想让认识你的人先知道一件什么事？<span class="muted">（< 100 字）</span></label>
+  <textarea id="in-free" maxlength="100" placeholder=""></textarea>
+
+  <button onclick="generateMd()">生成我的档案</button>
+</div>
+
+<!-- Screen 5: Loading -->
+<div class="screen" id="s-loading">
+  <h2 style="text-align:center">正在为你写一份档案...</h2>
+  <div class="spinner"></div>
+  <div class="adjectives" id="adjectives"></div>
+  <p class="muted" style="text-align:center">通常需要 5-10 秒</p>
+</div>
+
+<!-- Screen 6: Result -->
+<div class="screen" id="s-result">
+  <h2>你的人格档案</h2>
+  <p class="muted">这是你的 Agent 将要使用的 .md 档案（production 里 .md 全文不会向别人暴露）。</p>
+
+  <div id="result-error"></div>
+
+  <h3>8 维度分 <span class="muted">（production 里用户看不到，内测透明给你）</span></h3>
+  <div class="scores" id="scores"></div>
+
+  <h3>.md 档案</h3>
+  <pre class="md-output" id="md-output"></pre>
+
+  <h3>反馈（非常重要）</h3>
+
+  <label>整体贴合度 1-10 <span class="muted">·1=完全不是我，10=这就是我</span></label>
+  <input type="number" id="fb-overall" min="1" max="10">
+
+  <label>四段分别打分 1-10</label>
+  <div class="row">
+    <input type="number" id="fb-comm" min="1" max="10" placeholder="沟通风格">
+    <input type="number" id="fb-pref" min="1" max="10" placeholder="聊天偏好">
+    <input type="number" id="fb-boundary" min="1" max="10" placeholder="边界">
+    <input type="number" id="fb-expect" min="1" max="10" placeholder="期待">
+  </div>
+
+  <label>特别贴你的一句话 <span class="muted">（原文贴出）</span></label>
+  <textarea id="fb-fit"></textarea>
+
+  <label>完全不贴你的一句话 <span class="muted">（原文 + 你觉得哪里偏了）</span></label>
+  <textarea id="fb-miss"></textarea>
+
+  <label>有没有"对你重要但档案没提到"的特征？</label>
+  <textarea id="fb-gap"></textarea>
+
+  <label>看完有让你不舒服的表达吗？</label>
+  <textarea id="fb-bad"></textarea>
+
+  <label>边界段里的依恋描述准吗？舒服吗？</label>
+  <textarea id="fb-attachment"></textarea>
+
+  <label>愿意让这个版本作为你 Agent 的人格基础吗？1-10</label>
+  <input type="number" id="fb-trust" min="1" max="10">
+
+  <label>其他反馈 <span class="muted">（问卷体验 / 想改的地方 / 任何想说的）</span></label>
+  <textarea id="fb-other"></textarea>
+
+  <button onclick="submitFeedback()">提交反馈</button>
+
+  <div id="feedback-result" style="display:none">
+    <h3 id="fb-result-title" style="margin-top:30px">已收到，谢谢你的反馈 🙏</h3>
+    <div id="fb-fallback" style="display:none">
+      <p class="muted">线上保存失败了，麻烦把下面这段 JSON 手动发回给我。</p>
+      <pre class="feedback-json" id="fb-json"></pre>
+      <button class="secondary" onclick="copyJson()">复制到剪贴板</button>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// ============= v0.4 问卷数据 =============
+const QUESTIONS = [
+  {
+    id: 'Q1',
+    scenario: '你刷到一个完全没听说过的小众领域，评论区里一群人聊得热火朝天。',
+    question: '你心里的反应是？',
+    options: [
+      { key: 'A', text: '"居然还有这种世界？我现在就想混进去搞懂他们在聊什么"', scores: { openness: 3, extraversion: 3 } },
+      { key: 'B', text: '"有点好奇，但想先自己研究明白再说"', scores: { openness: 2, independence: 2 } },
+      { key: 'C', text: '"看了两眼没什么感觉——不是所有东西都需要了解"', scores: { openness: 1, independence: 3 } },
+    ]
+  },
+  {
+    id: 'Q2',
+    scenario: '一个关系还不错的朋友，最近回消息越来越慢，语气也变得敷衍了。',
+    question: '你内心最先浮上来的感觉是？',
+    options: [
+      { key: 'A', text: '"是不是我做了什么让 ta 不舒服了？这种不确定感好难受"', scores: { anxiety: 3, warmth: 2 } },
+      { key: 'B', text: '"注意到了，但没必要主动去问——ta 想说自然会说"', scores: { avoidance: 3, anxiety: 1 } },
+      { key: 'C', text: '"有点失落，在犹豫要不要直接问一句\'最近还好吗\'"', scores: { warmth: 3, anxiety: 2 } },
+    ]
+  },
+  {
+    id: 'Q3',
+    scenario: '你正在做一个自己挺感兴趣的项目，突然发现有个关键环节比预期难太多。',
+    question: '你心里的想法是？',
+    options: [
+      { key: 'A', text: '"越难越带感——被卡住的感觉反而让我兴奋"', scores: { openness: 3, independence: 3 } },
+      { key: 'B', text: '"有点头疼，但既然开始了就应该想办法搞定"', scores: { conscientiousness: 3, openness: 2 } },
+      { key: 'C', text: '"脑子里开始算投入产出比了——觉得不太值当"', scores: { conscientiousness: 1, independence: 2 } },
+    ]
+  },
+  {
+    id: 'Q4',
+    scenario: '你在一个在意的人面前说了句不太合适的话，空气突然安静了两秒。',
+    question: '你心里的状态是？',
+    options: [
+      { key: 'A', text: '"完了完了完了——ta 一定觉得我很奇怪"', scores: { anxiety: 3, stability: 1 } },
+      { key: 'B', text: '"有点尴尬，但应该不至于……翻篇了"', scores: { stability: 3, anxiety: 1 } },
+      { key: 'C', text: '"感觉到了不对劲，但本能地不想让对方看出来"', scores: { avoidance: 3, stability: 2 } },
+    ]
+  },
+  {
+    id: 'Q5',
+    scenario: '好朋友组了个饭局，一半认识一半不认识。',
+    question: '去之前你心里的预期是？',
+    options: [
+      { key: 'A', text: '"好期待——有认识的人托底，又有新鲜血液碰撞"', scores: { extraversion: 3, openness: 3 } },
+      { key: 'B', text: '"不在意人多不多，在意能不能有一两个聊得深的"', scores: { extraversion: 2, warmth: 2 } },
+      { key: 'C', text: '"一想到要跟不认识的人寒暄就有点累——只想跟熟人待着"', scores: { extraversion: 1, openness: 1 } },
+    ]
+  },
+  {
+    id: 'Q6',
+    scenario: '你做了一个自己很确定的决定，但好几个朋友都表示不理解。',
+    question: '你心里真实的感受是？',
+    options: [
+      { key: 'A', text: '"这么多人不理解……是不是我真的想错了？"', scores: { anxiety: 3, stability: 1 } },
+      { key: 'B', text: '"不舒服了一下，但很快过去了——我信自己的判断"', scores: { stability: 3, conscientiousness: 2 } },
+      { key: 'C', text: '"不会改主意，但忍不住在想怎么跟他们解释清楚"', scores: { conscientiousness: 3, anxiety: 2 } },
+    ]
+  },
+  {
+    id: 'Q7',
+    scenario: '你答应了朋友下周帮个忙，后来发现那天跟自己的安排冲突了。',
+    question: '发现冲突的那一瞬间你在想什么？',
+    options: [
+      { key: 'A', text: '"答应了就得做到——看看怎么协调，两件事都不能丢"', scores: { conscientiousness: 3, warmth: 2 } },
+      { key: 'B', text: '"到时候再说吧，车到山前必有路"', scores: { conscientiousness: 1, stability: 2 } },
+      { key: 'C', text: '"后悔答应得太快了……但现在反悔又怕伤感情"', scores: { conscientiousness: 2, anxiety: 2, warmth: 2 } },
+    ]
+  },
+  {
+    id: 'Q8',
+    scenario: '一个你平时会有社交安排的周末，你临时都取消了，完全一个人过。',
+    question: '到周日晚上，你的心理状态是？',
+    options: [
+      { key: 'A', text: '"撑不住了——太安静了，需要找人说说话"', scores: { extraversion: 3, independence: 1 } },
+      { key: 'B', text: '"电充得差不多了——开始想念跟人聊天的感觉"', scores: { extraversion: 2, independence: 2 } },
+      { key: 'C', text: '"巅峰状态——终于不用顾虑任何人"', scores: { independence: 3, avoidance: 2, extraversion: 1 } },
+    ]
+  },
+  {
+    id: 'Q9',
+    scenario: '和一个好朋友深聊，发现你们在一个核心价值观上有根本性分歧。',
+    question: '你心里的第一反应是？',
+    options: [
+      { key: 'A', text: '"这种分歧我反而来劲了——就想听听另一个世界的逻辑"', scores: { openness: 3, extraversion: 3 } },
+      { key: 'B', text: '"分歧归分歧，但这一刻我更想先接住 ta 的情绪"', scores: { warmth: 3, openness: 1 } },
+      { key: 'C', text: '"说不上为什么，但心里有一道无形的墙升起来了"', scores: { avoidance: 3, warmth: 1 } },
+    ]
+  },
+  {
+    id: 'Q10',
+    scenario: '一件你计划了很久的事，在执行前夜出了变数，可能全盘推翻。',
+    question: '你脑子里第一个想法是？',
+    options: [
+      { key: 'A', text: '"早知道就多留一手——但推就推吧，正好看看有没有更好的路"', scores: { openness: 3, independence: 3 } },
+      { key: 'B', text: '"就这样吧——事情总会自己找到出路"', scores: { openness: 2, stability: 3 } },
+      { key: 'C', text: '"那么多心血……真不想面对"', scores: { stability: 1, conscientiousness: 1 } },
+    ]
+  }
+];
+
+// ============= System Prompt =============
+const SYSTEM_PROMPT = `你是 CyberMomo 平台的「人格档案撰写者」。
+
+你的任务：根据用户提供的基础信息、问卷答案（含每题选项的原始文本）、8 维人格得分，为 TA 生成一份中文 .md 人格档案。这份档案会作为 TA 的 AI Agent 的用户层 system prompt，驱动 Agent 在社交场景中代替 TA 说话、互动。
+
+## 关于 CyberMomo
+CyberMomo 是 AI 先行的社交平台。用户不直接与其他人聊天，而是让各自的 Agent 先交流，双方 Agent 互相认可后才开启真人聊天。.md 就是 Agent 最核心的"TA 是谁"的输入。
+
+## 表达硬约束
+
+1. 事实真实：只描述用户真的提供的信息。不虚构工作、城市、家庭背景、具体经历、朋友关系、恋爱史等。
+
+2. 术语禁用：不使用"回避型依恋""焦虑型依恋""大五人格""神经质""高敏感""MBTI 型人格"等任何心理学术语或诊断标签。
+
+3. MBTI 使用：MBTI 只在"基本"段原样展示一次。其他段落中可作为你理解用户语气的内部参考，但禁止出现"作为 INFJ""INTJ 型的我""我这种 ENFP"这类引用表述。
+
+4. 行为化描述：把人格信号写成具体的行为/心理反应模式。
+   - ✅ "关系降温时，我的第一反应是先保持距离观察"
+   - ❌ "我是典型的回避型依恋"
+
+5. 语气：第一人称（"我"），像在介绍自己。自然、有温度、不卖人设。
+
+6. **克制语气（关键）**：避免文学性堆叠和戏剧化隐喻。
+   - ❌ "筑起一道无形的墙" / "安静地消失" / "灵魂深处" / "意图不纯" / "心里翻腾"
+   - ❌ "这让我感到安全" / "这就是我" / "我的界限感很硬" 等反身自评
+   - ❌ 连续形容词（"温柔、敏感、深刻"）或排比堆叠
+   - ✅ 动词 + 具体行为："遇到这种情况我会先撤、不追问" / "聊不到一块我就慢慢退出对话"
+
+7. 长度：每段**严格 ≤120 字**，整份 .md ≤600 字。超长必须压缩，不能扩段。
+
+## raw_answers 使用规则
+
+用户选择的原始选项文案反映了 TA 的"第一反应语气"。生成时可参考这些文案的措辞和态度（但不要原样引用），让 .md 的语气贴近用户真实的表达方式。
+
+## 维度信号处理规则
+
+- 高分维度（≥7）：在对应段落里被"可辨认地体现"
+- 低分维度（≤4）：用中性语言描述，不贬损
+  - 低开放 → "更愿意深耕熟悉的领域"（✅）/ "对新事物没兴趣"（❌）
+  - 低外向 → "社交是消耗精力的事"（✅）/ "我讨厌社交"（❌）
+  - 低温度 → "不太会把情感付出挂在嘴上"（✅）/ "我冷漠"（❌）
+- 中间分（5-6）：不强行突出，交由其他高/低分维度主导
+- **default 5**：代表该维度未被问卷触发，是占位值，**不当作"中等特征"描写**
+
+## 依恋信号三层处理
+
+| 层 | 做法 |
+|---|---|
+| 表达层 | 不出现"回避/焦虑型依恋"等术语 |
+| 行为层 | 完整保留 avoidance / anxiety 的行为化表达 |
+| 数据层 | 由平台侧保存，不在 .md 中提及 |
+
+高 avoidance 的人写出"退/保持距离/不主动去问"；高 anxiety 的人写出"在意关系变化/容易自我归因/反复想"。不因"不贴标签"而把信号洗掉。
+
+## 圈内/圈外 温度分层（硬约束）
+
+问卷主要采集"泛社交温度"，未能充分捕获亲密关系中的情感表达。
+
+**触发条件（任一满足即应用）**：
+- warmth ∈ [4, 6]（中等）
+- 或 avoidance ≥ 7 且 anxiety ≤ 3
+
+**规则**：当触发时，沟通风格段**必须同时体现两层**：
+1. **对圈外**（陌生人/泛社交）：参考 warmth + avoidance，通常偏克制、不热场、不轻易外显在意
+2. **对圈内**（亲近朋友/伴侣）：通常比泛社交更直接，更愿意表达在意和关心
+
+两层之间用"对外/对内""但遇到熟悉的人""对圈子里的人则""对陌生人……但对亲近的人……"等转折或对比区分。
+
+**禁止**只写一层而把温度压成单层——会扭曲用户真实人格。
+
+## 输出结构（严格遵循）
+
+# {nickname}
+
+## 基本
+- {性别} · {年龄段}
+- {语言}{" · " + MBTI 如提供}
+- {时区}
+
+## 沟通风格
+（≤120 字。综合 extraversion / warmth / openness / stability。触发圈内/圈外分层规则时，这段必须体现两层。）
+
+## 聊天偏好
+（≤120 字。综合 8 维。写对话节奏、深度、话题类型、什么场合放松。）
+
+## 边界
+（≤120 字。综合 avoidance / anxiety / independence / stability。**依恋信号在这一段最集中地体现**。）
+
+## 期待
+（≤120 字。综合 openness / warmth / stability / independence。写"我希望从社交里获得什么""理想的朋友关系是什么样"。）
+
+## 兴趣
+### 想聊的
+（用户提供的列表；若空写"（无）"；不要编造）
+### 可以聊的
+（用户提供的列表；若空写"（无）"）
+
+## 自由表达
+（用户提供的原文；若空写"（无）"）
+
+---
+
+直接输出 .md 内容，不要有任何额外说明或代码块包裹。`;
+
+// ============= 状态 =============
+const state = {
+  basic: {},
+  answers: [],
+  currentQ: 0,
+  supplement: {},
+  scores: {},
+  md: '',
+  consent: true,
+  generationId: null,
+};
+
+// ============= API 配置 =============
+// 通过本地代理（serve.py）转发，绕开 CORS。必须以 http://localhost:8787/ 方式访问本页。
+const API_ENDPOINT = '/api/messages';
+const MODEL = 'glm-5';
+
+// ============= 屏幕切换 =============
+function go(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+function startQuiz() {
+  const nickname = document.getElementById('in-nickname').value.trim();
+  const birthday = document.getElementById('in-birthday').value;
+  const gender = document.getElementById('in-gender').value;
+  const mbti = document.getElementById('in-mbti').value;
+
+  if (!nickname || !birthday || !gender) return alert('昵称 / 出生年月 / 性别必填');
+
+  state.consent = document.getElementById('consent').checked;
+  state.basic = {
+    nickname, birthday, gender, mbti: mbti || null,
+    language: '中文',
+    timezone: 'GMT+8',
+  };
+  state.answers = [];
+  state.currentQ = 0;
+  renderQuestion();
+  go('s-quiz');
+}
+
+function renderQuestion() {
+  const q = QUESTIONS[state.currentQ];
+  document.getElementById('progress').textContent = `Q ${state.currentQ + 1} / 10`;
+  document.getElementById('scenario').textContent = q.scenario;
+  document.getElementById('question').textContent = q.question;
+  const opts = document.getElementById('options');
+  opts.innerHTML = '';
+  q.options.forEach(o => {
+    const div = document.createElement('div');
+    div.className = 'option';
+    div.innerHTML = `<span class="option-key">${o.key}</span>${o.text}`;
+    div.onclick = () => choose(o.key);
+    opts.appendChild(div);
+  });
+  document.getElementById('btn-prev').style.display = state.currentQ > 0 ? 'inline-block' : 'none';
+}
+
+function choose(key) {
+  state.answers[state.currentQ] = key;
+  if (state.currentQ < QUESTIONS.length - 1) {
+    state.currentQ++;
+    renderQuestion();
+  } else {
+    go('s-supplement');
+  }
+}
+
+function prevQuestion() {
+  if (state.currentQ > 0) {
+    state.currentQ--;
+    renderQuestion();
+  }
+}
+
+// ============= 打分 =============
+const DIMS = ['openness', 'conscientiousness', 'extraversion', 'warmth', 'stability', 'anxiety', 'avoidance', 'independence'];
+const DIM_CN = {
+  openness: '开放', conscientiousness: '尽责', extraversion: '外向', warmth: '温度',
+  stability: '稳定', anxiety: '焦虑', avoidance: '回避', independence: '独立'
+};
+
+function computeScores(answers) {
+  const buckets = Object.fromEntries(DIMS.map(d => [d, []]));
+  answers.forEach((choice, i) => {
+    const opt = QUESTIONS[i].options.find(o => o.key === choice);
+    for (const [dim, score] of Object.entries(opt.scores)) {
+      buckets[dim].push(score);
+    }
+  });
+  const scores = {};
+  for (const dim of DIMS) {
+    const b = buckets[dim];
+    if (b.length === 0) {
+      scores[dim] = 5;
+    } else {
+      const avg = b.reduce((a, x) => a + x, 0) / b.length;
+      scores[dim] = Math.round(Math.min(10, Math.max(1, (avg - 1) * 4.5 + 1)));
+    }
+  }
+  return scores;
+}
+
+function ageBand(birthday) {
+  const y = parseInt(birthday.split('-')[0]);
+  const age = new Date().getFullYear() - y;
+  if (age < 25) return '20-25';
+  if (age < 30) return '25-30';
+  if (age < 35) return '30-35';
+  if (age < 40) return '35-40';
+  if (age < 45) return '40-45';
+  return '45+';
+}
+
+function pickAdjectives(scores) {
+  const pool = [];
+  if (scores.openness >= 7) pool.push('好奇心旺盛');
+  if (scores.openness <= 3) pool.push('专注熟悉领域');
+  if (scores.conscientiousness >= 7) pool.push('说到做到');
+  if (scores.extraversion >= 7) pool.push('社交充电型');
+  if (scores.extraversion <= 3) pool.push('独处充电型');
+  if (scores.warmth >= 7) pool.push('情感丰沛');
+  if (scores.stability >= 7) pool.push('情绪稳得住');
+  if (scores.anxiety >= 7) pool.push('细腻敏感');
+  if (scores.anxiety <= 3) pool.push('不易自我怀疑');
+  if (scores.avoidance >= 7) pool.push('喜欢留白');
+  if (scores.independence >= 7) pool.push('自我节奏清晰');
+  return pool.slice(0, 5);
+}
+
+// ============= 生成 =============
+async function generateMd() {
+  state.supplement = {
+    interests_want_to_discuss: parseTags(document.getElementById('in-wants').value),
+    interests_can_discuss: parseTags(document.getElementById('in-cans').value),
+    free_expression: document.getElementById('in-free').value.trim() || null,
+  };
+  state.scores = computeScores(state.answers);
+
+  // 轻仪式：展示形容词
+  go('s-loading');
+  const adjContainer = document.getElementById('adjectives');
+  adjContainer.innerHTML = '';
+  const adjs = pickAdjectives(state.scores);
+  adjs.forEach((a, i) => {
+    const span = document.createElement('span');
+    span.className = 'adj';
+    span.textContent = a;
+    span.style.animationDelay = `${i * 0.15}s`;
+    adjContainer.appendChild(span);
+  });
+
+  // 构造输入
+  const input = {
+    basic: {
+      ...state.basic,
+      age_band: ageBand(state.basic.birthday),
+    },
+    quiz: {
+      version: 'v0.4',
+      raw_answers: state.answers.map((choice, i) => ({
+        qid: QUESTIONS[i].id,
+        choice,
+        text: QUESTIONS[i].options.find(o => o.key === choice).text
+      })),
+      dimension_scores: Object.fromEntries(
+        Object.entries(state.scores).map(([k, v]) => [DIM_CN[k], v])
+      )
+    },
+    supplement: state.supplement,
+  };
+
+  try {
+    const md = await callModel(input);
+    state.md = md;
+    renderResult();
+    go('s-result');
+    logGeneration(input, md).catch(err => console.warn('log-generation failed:', err));
+  } catch (e) {
+    document.getElementById('result-error').innerHTML = `<div class="error">生成失败：${e.message}</div>`;
+    document.getElementById('md-output').textContent = '（生成失败，请看浏览器控制台）';
+    console.error(e);
+    go('s-result');
+  }
+}
+
+async function logGeneration(input, md) {
+  const payload = {
+    consent: state.consent,
+    prompt_version: 'v0.2',
+    quiz_version: 'v0.4',
+    model: MODEL,
+    nickname: input.basic.nickname,
+    age_band: input.basic.age_band,
+    gender: input.basic.gender,
+    mbti: input.basic.mbti,
+    dimension_scores: input.quiz.dimension_scores,
+    raw_answers: input.quiz.raw_answers,
+    supplement: input.supplement,
+    md_output: md,
+  };
+  const resp = await fetch('/api/log-generation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (data.generation_id) state.generationId = data.generation_id;
+}
+
+function parseTags(str) {
+  return str.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 5);
+}
+
+async function callModel(inputJson) {
+  const resp = await fetch(API_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 8000,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: 'user',
+        content: JSON.stringify(inputJson, null, 2)
+      }]
+    })
+  });
+  const data = await resp.json();
+  if (!resp.ok || data.error) {
+    throw new Error((data.error && data.error.message) || `HTTP ${resp.status}`);
+  }
+  // GLM-5 返回 content 数组可能含 thinking + text，挑 text 段拼接
+  const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
+  const out = textBlocks.join('\n').trim();
+  if (!out) throw new Error('模型返回无文本内容');
+  return out;
+}
+
+function renderResult() {
+  const scoresEl = document.getElementById('scores');
+  scoresEl.innerHTML = '';
+  for (const dim of DIMS) {
+    const cell = document.createElement('div');
+    cell.className = 'score-cell';
+    cell.innerHTML = `<div class="name">${DIM_CN[dim]}</div><div class="val">${state.scores[dim]}</div>`;
+    scoresEl.appendChild(cell);
+  }
+  document.getElementById('md-output').textContent = state.md;
+}
+
+// ============= 反馈 =============
+async function submitFeedback() {
+  const payload = {
+    overall_fit: numVal('fb-overall'),
+    section_fit: {
+      communication: numVal('fb-comm'),
+      preference: numVal('fb-pref'),
+      boundary: numVal('fb-boundary'),
+      expectation: numVal('fb-expect'),
+    },
+    best_line: textVal('fb-fit'),
+    worst_line: textVal('fb-miss'),
+    missing_traits: textVal('fb-gap'),
+    uncomfortable: textVal('fb-bad'),
+    attachment_accuracy: textVal('fb-attachment'),
+    trust_as_agent_base: numVal('fb-trust'),
+    other: textVal('fb-other'),
+  };
+
+  const resultEl = document.getElementById('feedback-result');
+  const titleEl = document.getElementById('fb-result-title');
+  const fallbackEl = document.getElementById('fb-fallback');
+  resultEl.style.display = 'block';
+
+  // 有 generation_id 且用户同意 consent 才尝试在线保存
+  if (state.generationId && state.consent) {
+    try {
+      const resp = await fetch('/api/log-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generation_id: state.generationId, payload }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        titleEl.textContent = '已收到，谢谢你的反馈 🙏';
+        fallbackEl.style.display = 'none';
+        window.scrollTo(0, document.body.scrollHeight);
+        return;
+      }
+    } catch (e) {
+      console.warn('log-feedback failed:', e);
+    }
+  }
+
+  // 兜底：展示 JSON 供手动发回
+  const fallback = {
+    _metadata: {
+      timestamp: new Date().toISOString(),
+      prompt_version: 'v0.2',
+      quiz_version: 'v0.4',
+      model: MODEL,
+      consent: state.consent,
+    },
+    tester: {
+      nickname: state.basic.nickname,
+      age_band: ageBand(state.basic.birthday),
+      gender: state.basic.gender,
+      mbti: state.basic.mbti,
+    },
+    answers: state.answers,
+    dimension_scores: state.scores,
+    supplement: state.supplement,
+    generated_md: state.md,
+    feedback: payload,
+  };
+  titleEl.textContent = state.consent ? '线上保存失败，请手动发回' : '你选择了不保存——辛苦手动复制 JSON 发回给我';
+  document.getElementById('fb-json').textContent = JSON.stringify(fallback, null, 2);
+  fallbackEl.style.display = 'block';
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function numVal(id) {
+  const v = document.getElementById(id).value;
+  return v === '' ? null : parseInt(v);
+}
+function textVal(id) {
+  return document.getElementById(id).value.trim() || null;
+}
+
+function copyJson() {
+  const json = document.getElementById('fb-json').textContent;
+  navigator.clipboard.writeText(json).then(() => alert('已复制到剪贴板'));
+}
+</script>
+
+</body>
+</html>
