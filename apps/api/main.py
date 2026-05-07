@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.auth.router import router as auth_router
+from src.md.router import router as md_router
 from src.shared.settings import get_settings
 
 
@@ -52,10 +53,9 @@ app.add_middleware(
 # Router 挂载
 # ========================================
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(md_router, prefix="/api/md", tags=["md"])
 
-# TODO Phase 1+:逐模块挂上
-# from src.md.router import router as md_router
-# app.include_router(md_router, prefix="/api/md", tags=["md"])
+# TODO Phase 2+:逐模块挂上
 # from src.match.router import router as match_router
 # app.include_router(match_router, prefix="/api/match", tags=["match"])
 # from src.room.router import router as room_router

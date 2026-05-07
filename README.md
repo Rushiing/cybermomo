@@ -70,9 +70,22 @@ curl http://localhost:8787/healthz
 
 | Phase | 状态 |
 |---|---|
-| **Phase 0 · 地基** | 进行中(monorepo 初始化 ✅,DB schema/Auth/CI 待补) |
-| Phase 1 · 注册 + .md 创建 | 待启动 |
+| **Phase 0 · 地基** | ✅ 已落(monorepo + 15 表 schema + LLM 网关 + auth/md router skeleton + smoke test) |
+| Phase 1 · 注册 + .md 创建 | 下一步:Google OAuth 接入 + POST /api/md 实装 |
 | Phase 2 · 匹配 + Agent 互聊 | 待启动 |
 | Phase 3 · 摘要 + 个人房间 | 待启动 |
 | Phase 4 · 真人聊天 + callout + 观察报告 | 待启动 |
 | Phase 5 · 联调 + 朋友盘内测 | 待启动 |
+
+## 部署状态
+
+- ✅ Railway 服务运行中,Dockerfile 构建,健康检查通
+- ✅ Postgres + pgvector,15 张表创建(alembic init_v1)
+- ✅ 每次 push 自动 `alembic upgrade head`(railway.json preDeployCommand)
+
+## Phase 0 还可补的(P1,不阻塞 Phase 1)
+
+- prompt seed 脚本(把 v0 prompts 抽出来塞进 prompt_versions 表,Phase 2 启用)
+- Sentry 接入
+- structured logging(目前用 print)
+- 前端 service 部署(Railway 第二个 service 跑 apps/web/)
