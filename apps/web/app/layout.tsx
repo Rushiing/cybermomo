@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import MockUserBanner from '@/components/MockUserBanner'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -13,7 +14,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        {children}
+        {/* Phase 1+ OAuth 接入后删除 */}
+        <MockUserBanner />
+      </body>
     </html>
   )
 }
