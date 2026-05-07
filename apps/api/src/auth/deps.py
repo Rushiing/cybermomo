@@ -70,4 +70,5 @@ async def get_current_user(
     return user
 
 
-CurrentUser = Annotated[User, Depends(get_current_user)]
+# 直接 Depends 实例,可作为参数的 default value(`current_user: User = CurrentUser`)
+CurrentUser = Depends(get_current_user)
