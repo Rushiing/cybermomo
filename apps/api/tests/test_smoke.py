@@ -36,7 +36,7 @@ async def test_auth_me_not_implemented(client: AsyncClient):
     assert resp.status_code == 501
 
 
-async def test_md_routes_not_implemented(client: AsyncClient):
-    """Phase 0 阶段 /api/md 路由占位,全部 501"""
+async def test_md_me_requires_auth(client: AsyncClient):
+    """/api/md/me 需要 auth 头(mock 或 JWT)"""
     resp = await client.get("/api/md/me")
-    assert resp.status_code == 501
+    assert resp.status_code == 401

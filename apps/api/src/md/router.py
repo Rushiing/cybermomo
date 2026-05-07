@@ -1,21 +1,42 @@
 """
 02 · .md 创建 · API router
 
-Phase 0/1 阶段:
-- POST /api/md            创建 .md(校验 v3 profile_json + 写入)
-- GET  /api/me/md         返回当前用户的 active md_document
-- (Phase 4 后)PATCH 或 重新创建支持 .md 修改
+- POST /api/md            创建新档案(校验 v3 profile_json + 写入)
+- GET  /api/md/me         返回当前用户的 active md_document
 
-注:auth 还没实现,占位 user_id=None 由 auth dependency 注入。
-当前 endpoints 全部 501,Phase 1 配合 auth 一起实装。
+铁律体现:任何 endpoint 都 scoped to current_user;.md 内容只 host 自己可读。
+
+Phase 0:用 mock auth(X-Mock-User-Id 头)
+Phase 1 OAuth:替换 deps.get_current_user,这里逻辑不变
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth.deps import CurrentUser
+from src.auth.models import User
+from src.md import service as md_service
+from src.md.models import MdDocument
 from src.md.schemas import CreateMdRequest, MdDocumentResponse
 from src.shared.db import get_session
 
 router = APIRouter()
+
+
+def _to_response(md: MdDocument) -> MdDocumentResponse:
+    """把 ORM 实体打包成 API 响应(剥离 profile_json 大对象,只暴露关键摘要)"""
+    portrait = md.profile_json.get("portrait", {}) if md.profile_json else {}
+    return MdDocumentResponse(
+        id=md.id,
+        user_id=md.user_id,
+        version=md.version,
+        profile_version=md.profile_version,
+        domains_interested=md.domains_interested or [],
+        domains_avoided=md.domains_avoided or [],
+        portrait_title=portrait.get("title", ""),
+        portrait_body=portrait.get("body", []),
+        is_active=md.is_active,
+        created_at=md.created_at,
+    )
 
 
 @router.post(
@@ -25,24 +46,31 @@ router = APIRouter()
 )
 async def create_md(
     payload: CreateMdRequest,
+    current_user: User = CurrentUser,
     db: AsyncSession = Depends(get_session),
 ):
     """
-    用户提交 v3 profile_json,服务端 schema 校验后入库。
-    创建后 active 标记自动指向新版本(同 user 旧版本 is_active=false)。
+    用户提交 v3 profile_json。后端只做 schema 校验 + 入库,**不重新计算**。
+    校验通过 + 同事务抽镜像列 + 失活旧版本 + 插入新版本 + 标 active。
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="POST /api/md 未实装 — Phase 1 接 auth + 写入逻辑后启用",
+    md = await md_service.create_md_document(
+        db,
+        user_id=current_user.id,
+        profile=payload.profile,
     )
+    return _to_response(md)
 
 
 @router.get("/me", response_model=MdDocumentResponse)
 async def get_my_md(
+    current_user: User = CurrentUser,
     db: AsyncSession = Depends(get_session),
 ):
-    """返回当前用户的 active .md(profile_version + portrait_body 等)"""
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="GET /api/md/me 未实装 — Phase 1 接 auth 后启用",
-    )
+    """返回当前用户的 active .md。"""
+    md = await md_service.get_active_md_for_user(db, user_id=current_user.id)
+    if md is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="还没有生成 .md 档案 — 先做完 17 题问卷",
+        )
+    return _to_response(md)
