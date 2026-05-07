@@ -4,7 +4,7 @@ Pydantic Settings · 从环境变量读取配置
 from functools import lru_cache
 from typing import List
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://cybermomo:cybermomo_dev@localhost:5432/cybermomo"
     )
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def _normalize_pg_url(cls, v: str) -> str:
+        """
+        Railway Postgres 插件注入的格式是 postgres://...,SQLAlchemy + asyncpg 需要 postgresql+asyncpg://...
+        统一兼容三种写法。
+        """
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://") and "+asyncpg" not in v:
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # CORS
     cors_origins: str = Field(default="http://localhost:3000")
