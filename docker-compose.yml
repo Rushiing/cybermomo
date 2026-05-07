@@ -1,0 +1,29 @@
+# CyberMOMO 本地开发环境
+# 起 Postgres + pgvector,后端和前端在各自的进程里跑(uvicorn / next dev)
+#
+# 用法:
+#   docker-compose up -d        # 启动
+#   docker-compose down         # 停止
+#   docker-compose down -v      # 停止并删除数据(谨慎)
+#   docker-compose logs -f db   # 看日志
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: cybermomo-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: cybermomo
+      POSTGRES_PASSWORD: cybermomo_dev
+      POSTGRES_DB: cybermomo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cybermomo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
