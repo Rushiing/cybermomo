@@ -12,10 +12,9 @@ cybermomo/
 ├── legacy/
 │   └── prototype-v0.4/   # 盲测期 prototype(LLM 生成 .md)· 已 deprecated
 ├── scripts/              # 数据迁移、运维脚本
+├── Dockerfile            # 后端 service 镜像构建(Railway 默认 service)
 ├── docker-compose.yml    # 本地 Postgres + pgvector
-├── nixpacks.toml         # Railway 构建配置(默认跑 apps/api/)
-├── railway.json          # Railway 部署配置
-├── Procfile              # 启动命令(指向 apps/api/)
+├── railway.json          # Railway 部署配置(指向 Dockerfile)
 └── .env.example          # 环境变量示例
 ```
 
