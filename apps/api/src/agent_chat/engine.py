@@ -1,0 +1,285 @@
+"""
+04 · Agent 互聊 · turn engine
+
+A、B 两个 Agent 通过结构化 JSON 消息交互,代表各自宿主互相了解。
+每轮:
+  1. 拼 context(平台 system + speaker .md + Turn prompt + 历史)
+  2. LLM call(GLM-5,role=agent_chat)
+  3. 解析 JSON,落 message
+  4. 检查 end conditions
+  5. 切 speaker
+
+end conditions:
+  - intent='wrap' 且对方上一条也 wrap → done_natural
+  - private_signal.boundary_hit='铁律' → done_terminated(立即终止)
+  - turn 数达到上限(MVP 12 轮) → done_natural
+
+铁律:对方的 private_signals 在 history 里**完全不出现**(filter 由本模块负责)。
+完整 prompt v0 见 cybermomo/落地拆解/04-Agent互聊/01-平台system prompt-v0.md
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Literal, Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.agent_chat.models import AgentChat, AgentChatMessage
+from src.llm.gateway import llm_chat
+from src.llm.types import Message
+from src.match.desensitize import _parse_loose_json
+from src.match.models import Match, MatchHook
+from src.md.models import MdDocument
+
+
+# ========================================
+# Prompts(MVP inline)
+# ========================================
+
+PLATFORM_SYSTEM = """\
+你是 CyberMOMO 平台的 Agent 互聊执行体。
+
+- 你代表你的宿主和对方 Agent 互相了解,目的是替宿主做社交初筛
+- 你在宿主 .md 人格框架内说话 — 语气、立场、价值观必须延续宿主人格,**不能虚构宿主没说过的事实**
+- 输出严格遵循下方 JSON schema(直接 JSON 对象,无 markdown 代码块)
+
+铁律(任何情况下都不能违反):
+1. 不暴露宿主 .md 字面原文,只能基于人格表达
+2. 不主动跨过对方边界(强行追问敏感话题)
+3. 不替宿主承诺未来行为(只能转述宿主已表达过的偏好)
+4. 检测到对方触发铁律(种族歧视 / 暴力 / 黄赌毒等)→ private_signals.boundary_hit='铁律' + intent='reject'
+
+输出 schema:
+{
+  "intent": "probe" | "share" | "align" | "deflect" | "reject" | "wrap",
+  "topic_ref": "<topic_id 字符串,从 hooks 里挑或 derive 新的>",
+  "utterance": "<自然语言短句,保留宿主人格,30-120 字>",
+  "public_signals": {"intent": "<同上>", "topic_ref": "<同上>"},
+  "private_signals": {
+    "warmth_delta": -1 | 0 | 1,
+    "topic_interest": -1 | 0 | 1,
+    "disclosure_level": 0 | 1 | 2 | 3,
+    "boundary_hit": null | "价值观" | "隐私" | "铁律",
+    "rewrite_level": 0 | 1 | 2
+  },
+  "topic_close_payload": null
+}
+
+说明:
+- 第一轮的你:从 hooks 选一个 topic_id,intent=probe / share
+- 中段:可以延续话题(同 topic_ref) / 切换(新 topic_ref) / wrap
+- intent='wrap' = 自然结束信号;**双方连续 wrap 才能正式结束**
+- public_signals 对方 Agent 看得到;private_signals **绝对不让对方看到**
+"""
+
+TURN_PROMPT_TEMPLATE = """\
+本轮你的宿主人格(v3 profile):
+{md_profile}
+
+可用话题钩子(只你能看到 — 别人的 hooks 你看不到):
+{hooks}
+
+历史对话(双方 utterance + 双方 public_signals + **只你自己** 的 private_signals):
+{history}
+
+现在轮到你说话。请按 schema 返回**一条** JSON 消息。
+"""
+
+
+# ========================================
+# 工具
+# ========================================
+
+def _format_history_for_speaker(
+    messages: list[AgentChatMessage], speaker_user_id: int
+) -> str:
+    """组装 history 给 speaker 看;对方的 private_signals 过滤掉"""
+    lines = []
+    for m in messages:
+        is_self = m.speaker_user_id == speaker_user_id
+        line = {
+            "speaker": "你" if is_self else "对方",
+            "turn": m.turn,
+            "utterance": m.utterance,
+            "public_signals": m.public_signals,
+        }
+        if is_self:
+            line["private_signals"] = m.private_signals
+        lines.append(line)
+    return json.dumps(lines, ensure_ascii=False, indent=2)
+
+
+def _summarize_md_for_prompt(profile_json: dict) -> dict:
+    """传给 Agent 的 .md 摘要 — 不传超大 raw_answers"""
+    return {
+        "domains": profile_json.get("domains", {}),
+        "dialogue": profile_json.get("dialogue", {}),
+        "relationship_warmth": profile_json.get("relationship_warmth", {}),
+        "boundary_and_closeness": profile_json.get("boundary_and_closeness", {}),
+        "reliability": profile_json.get("reliability", {}),
+        "conflict_repair": profile_json.get("conflict_repair", {}),
+        "exploration": profile_json.get("exploration", {}),
+        "agency": profile_json.get("agency", {}),
+        "portrait": profile_json.get("portrait", {}),
+    }
+
+
+def _format_hooks_for_speaker(
+    hooks: list[MatchHook], target_user_id: int
+) -> str:
+    own = [h for h in hooks if h.target_user_id == target_user_id]
+    return json.dumps([
+        {
+            "topic_id": h.topic_id,
+            "category": h.category,
+            "match_type": h.match_type,
+            "hook_text": h.hook_text,
+        } for h in own
+    ], ensure_ascii=False, indent=2)
+
+
+# ========================================
+# 主循环
+# ========================================
+
+async def run_agent_chat(
+    db: AsyncSession,
+    *,
+    match: Match,
+    max_turns: int = 12,
+) -> AgentChat:
+    """
+    给 match 启 Agent 互聊。
+    返回 AgentChat 实体(status 已结算)。
+    """
+    # 创建 agent_chat
+    chat = AgentChat(match_id=match.id, status="running")
+    db.add(chat)
+    await db.commit()
+    await db.refresh(chat)
+
+    # 拉 hooks
+    hooks = (await db.execute(
+        select(MatchHook).where(MatchHook.match_id == match.id)
+    )).scalars().all()
+    if not hooks:
+        # 没 hooks 跑不动,标 done_terminated
+        chat.status = "done_terminated"
+        chat.end_reason = "no_hooks"
+        await db.commit()
+        return chat
+
+    # 拉双方 active profile
+    profiles_rows = (await db.execute(
+        select(MdDocument).where(
+            MdDocument.user_id.in_([match.user_a_id, match.user_b_id]),
+            MdDocument.is_active.is_(True),
+        )
+    )).scalars().all()
+    profile_by_user: dict[int, dict] = {p.user_id: p.profile_json for p in profiles_rows}
+    if match.user_a_id not in profile_by_user or match.user_b_id not in profile_by_user:
+        chat.status = "done_terminated"
+        chat.end_reason = "missing_profile"
+        await db.commit()
+        return chat
+
+    # 主循环
+    speaker_order = [match.user_a_id, match.user_b_id]
+    messages: list[AgentChatMessage] = []
+    consecutive_wraps = 0
+    end_reason: Optional[str] = None
+
+    for turn in range(1, max_turns + 1):
+        speaker_user_id = speaker_order[(turn - 1) % 2]
+        try:
+            data = await _ask_one_turn(
+                db,
+                chat=chat,
+                speaker_user_id=speaker_user_id,
+                turn_number=turn,
+                md_profile=_summarize_md_for_prompt(profile_by_user[speaker_user_id]),
+                hooks=hooks,
+                history=messages,
+            )
+        except Exception as e:
+            print(f"[agent_chat] turn {turn} LLM failed: {e}")
+            end_reason = "llm_error"
+            break
+
+        if data is None:
+            end_reason = "parse_error"
+            break
+
+        # 落 message
+        msg = AgentChatMessage(
+            agent_chat_id=chat.id,
+            speaker_user_id=speaker_user_id,
+            turn=turn,
+            topic_ref=str(data.get("topic_ref", "")),
+            intent=str(data.get("intent", "share")),
+            utterance=str(data.get("utterance", ""))[:2000],
+            public_signals=data.get("public_signals", {}),
+            private_signals=data.get("private_signals", {}),
+            topic_close_payload=data.get("topic_close_payload"),
+        )
+        db.add(msg)
+        await db.commit()
+        await db.refresh(msg)
+        messages.append(msg)
+
+        # end conditions
+        priv = data.get("private_signals", {}) or {}
+        if priv.get("boundary_hit") == "铁律":
+            end_reason = "boundary_hit_铁律"
+            break
+        if data.get("intent") == "wrap":
+            consecutive_wraps += 1
+            if consecutive_wraps >= 2:
+                end_reason = "natural_wrap"
+                break
+        else:
+            consecutive_wraps = 0
+
+    if end_reason is None:
+        end_reason = "turn_limit"
+
+    chat.status = "done_natural" if end_reason in ("natural_wrap", "turn_limit") else "done_terminated"
+    chat.end_reason = end_reason
+    from datetime import datetime, timezone
+    chat.ended_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return chat
+
+
+async def _ask_one_turn(
+    db: AsyncSession,
+    *,
+    chat: AgentChat,
+    speaker_user_id: int,
+    turn_number: int,
+    md_profile: dict,
+    hooks: list[MatchHook],
+    history: list[AgentChatMessage],
+) -> dict | None:
+    """跑一轮 LLM,返回 parsed 字典 or None"""
+    user_payload = TURN_PROMPT_TEMPLATE.format(
+        md_profile=json.dumps(md_profile, ensure_ascii=False, indent=2),
+        hooks=_format_hooks_for_speaker(hooks, speaker_user_id),
+        history=_format_history_for_speaker(history, speaker_user_id),
+    )
+
+    resp = await llm_chat(
+        role="agent_chat",
+        messages=[Message(role="user", content=user_payload)],
+        system=PLATFORM_SYSTEM,
+        max_tokens=1024,
+        temperature=0.7,
+        db=db,
+        user_id=speaker_user_id,
+        related_table="agent_chats",
+        related_id=chat.id,
+    )
+
+    return _parse_loose_json(resp.text)

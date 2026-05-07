@@ -17,7 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.auth.router import router as auth_router
 from src.match.router import router as match_router
 from src.md.router import router as md_router
+from src.room.router import router as room_router
 from src.shared.settings import get_settings
+from src.summary.router import router as summary_router
 
 
 @asynccontextmanager
@@ -56,8 +58,10 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(md_router, prefix="/api/md", tags=["md"])
 app.include_router(match_router, prefix="/api/match", tags=["match"])
+app.include_router(summary_router, prefix="/api/summary", tags=["summary"])
+app.include_router(room_router, prefix="/api/room", tags=["room"])
 
-# TODO Phase 3+:逐模块挂上
+# TODO Phase 4:逐模块挂上 — chat (人 ↔ 人) / governance
 # app.include_router(match_router, prefix="/api/match", tags=["match"])
 # from src.room.router import router as room_router
 # app.include_router(room_router, prefix="/api/room", tags=["room"])
