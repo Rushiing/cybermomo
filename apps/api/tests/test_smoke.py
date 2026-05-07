@@ -30,9 +30,15 @@ async def test_root(client: AsyncClient):
     assert body["status"] == "alive"
 
 
-async def test_auth_me_not_implemented(client: AsyncClient):
-    """Phase 0 阶段 /api/auth/me 应该 501 — Phase 1 才会接 OAuth"""
+async def test_auth_me_requires_auth(client: AsyncClient):
+    """/api/auth/me 需要 auth(mock 或 JWT)"""
     resp = await client.get("/api/auth/me")
+    assert resp.status_code == 401
+
+
+async def test_oauth_login_not_implemented(client: AsyncClient):
+    """OAuth 接入前 /api/auth/google/login 应 501"""
+    resp = await client.get("/api/auth/google/login")
     assert resp.status_code == 501
 
 

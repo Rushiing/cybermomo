@@ -12,12 +12,15 @@ Phase 1 OAuth:替换 deps.get_current_user,这里逻辑不变
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import BackgroundTasks
+
 from src.auth.deps import CurrentUser
 from src.auth.models import User
+from src.match import service as match_service
 from src.md import service as md_service
 from src.md.models import MdDocument
 from src.md.schemas import CreateMdRequest, MdDocumentResponse
-from src.shared.db import get_session
+from src.shared.db import SessionLocal, get_session
 
 router = APIRouter()
 
@@ -39,6 +42,15 @@ def _to_response(md: MdDocument) -> MdDocumentResponse:
     )
 
 
+async def _run_matching_async(user_id: int) -> None:
+    """BackgroundTask:用独立 DB session 跑匹配"""
+    async with SessionLocal() as db:
+        try:
+            await match_service.run_matching_for_user(db, user_id=user_id)
+        except Exception as e:
+            print(f"[match async] user_id={user_id} 跑匹配失败: {e}")
+
+
 @router.post(
     "",
     response_model=MdDocumentResponse,
@@ -46,18 +58,23 @@ def _to_response(md: MdDocument) -> MdDocumentResponse:
 )
 async def create_md(
     payload: CreateMdRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = CurrentUser,
     db: AsyncSession = Depends(get_session),
 ):
     """
     用户提交 v3 profile_json。后端只做 schema 校验 + 入库,**不重新计算**。
     校验通过 + 同事务抽镜像列 + 失活旧版本 + 插入新版本 + 标 active。
+
+    创建后**异步**触发匹配引擎(用 FastAPI BackgroundTasks,MVP 起步)。
     """
     md = await md_service.create_md_document(
         db,
         user_id=current_user.id,
         profile=payload.profile,
     )
+    # 异步跑匹配,不阻塞 response
+    background_tasks.add_task(_run_matching_async, current_user.id)
     return _to_response(md)
 
 
