@@ -2,26 +2,28 @@
 CyberMOMO API · FastAPI entrypoint
 
 MVP 阶段 monolith,模块通过 router 划分。
-- /healthz       健康检查
-- /api/auth/*    Google OAuth + session
-- /api/md/*      .md 创建(v3 规则引擎产出 profile JSON 入库)
-- /api/match/*   匹配引擎
-- /api/agent-chat/*  Agent 互聊
-- /api/room/*    个人房间
-- /api/summary/* Agent 简报
-- /api/chat/*    真人聊天
+
+Phase 0:auth router skeleton + healthz
+Phase 1:Google OAuth 完整 + .md 创建
+Phase 2:匹配 + Agent 互聊
+Phase 3:摘要 + 个人房间
+Phase 4:真人聊天 + callout + 观察报告
 """
 from contextlib import asynccontextmanager
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.auth.router import router as auth_router
+from src.shared.settings import get_settings
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[startup] CyberMOMO API · monorepo init")
-    # TODO: 初始化 DB pool / LLM gateway / Sentry
+    settings = get_settings()
+    print(f"[startup] CyberMOMO API · env={settings.env}")
+    print(f"[startup] CORS origins: {settings.cors_origins_list}")
+    # TODO Phase 0 完成后:DB 连通性自检 / Sentry init / Redis(future)
     yield
     print("[shutdown] CyberMOMO API")
 
@@ -33,17 +35,40 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+# ========================================
+# 中间件
+# ========================================
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=_settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# ========================================
+# Router 挂载
+# ========================================
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+
+# TODO Phase 1+:逐模块挂上
+# from src.md.router import router as md_router
+# app.include_router(md_router, prefix="/api/md", tags=["md"])
+# from src.match.router import router as match_router
+# app.include_router(match_router, prefix="/api/match", tags=["match"])
+# from src.room.router import router as room_router
+# app.include_router(room_router, prefix="/api/room", tags=["room"])
+# from src.summary.router import router as summary_router
+# app.include_router(summary_router, prefix="/api/summary", tags=["summary"])
+# from src.human_chat.router import router as chat_router
+# app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
+
+
+# ========================================
+# 顶级路由
+# ========================================
 @app.get("/")
 async def root():
     return {
@@ -57,8 +82,3 @@ async def root():
 async def healthz():
     """Railway healthcheck endpoint."""
     return {"ok": True}
-
-
-# TODO: 各业务模块 router 在这里挂上
-# from src.auth.router import router as auth_router
-# app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
