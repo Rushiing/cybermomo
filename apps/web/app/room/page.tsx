@@ -108,6 +108,28 @@ export default function RoomPage() {
   // 找到 active sessions(用户可以进入的真人聊天)
   const activeSessions = sessions.filter(s => s.status === "active")
 
+  // 双向索引:summary ↔ session
+  const summaryById: Record<number, SummaryResponse> = {}
+  summaries.forEach(s => { summaryById[s.id] = s })
+  const sessionBySourceSummary: Record<number, ChatSessionResponse> = {}
+  activeSessions.forEach(s => {
+    if (s.source_summary_id != null) sessionBySourceSummary[s.source_summary_id] = s
+  })
+
+  function jumpToBriefing(summaryId: number) {
+    setExpandedId(summaryId)
+    // 下一帧再 scroll(等 setExpandedId 引起的 expand 渲染完)
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`briefing-${summaryId}`)
+      if (!el) return
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      el.classList.add("ring-2", "ring-primary", "ring-offset-2", "ring-offset-bg")
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "ring-offset-bg")
+      }, 1800)
+    })
+  }
+
   return (
     <div className="min-h-screen">
       <Topbar active="room" />
@@ -144,6 +166,7 @@ export default function RoomPage() {
             </div>
             {activeSessions.map(s => {
               const otherUid = s.user_a_id === myUid ? s.user_b_id : s.user_a_id
+              const sourceSum = s.source_summary_id != null ? summaryById[s.source_summary_id] : null
               return (
                 <Link
                   key={s.id}
@@ -162,6 +185,18 @@ export default function RoomPage() {
                             ? `最近一条 ${new Date(s.last_message_at).toLocaleString("zh-CN")}`
                             : "等你开口"}
                         </div>
+                        {sourceSum && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              jumpToBriefing(sourceSum.id)
+                            }}
+                            className="text-[11px] text-ink-tertiary hover:text-primary-dark mt-1 transition"
+                          >
+                            源自《{sourceSum.verdict}》{new Date(sourceSum.created_at).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })} 那张 ↑
+                          </button>
+                        )}
                       </div>
                     </div>
                     <span className="text-primary-dark font-medium text-sm">进入 →</span>
@@ -197,10 +232,12 @@ export default function RoomPage() {
             const isPreBriefing = s.summary_type === "pre_briefing"
             const isObservation = s.summary_type === "human_chat_observation"
             const canViewAgentChat = !!s.agent_chat_id  // 只有源自 agent_chat 的简报能查看互聊
+            const linkedSession = sessionBySourceSummary[s.id]  // 该简报衍生出的活跃 session(若有)
 
             return (
               <article
                 key={s.id}
+                id={`briefing-${s.id}`}
                 className={`bg-bg-elevated border rounded-md p-5 transition cursor-pointer ${
                   decided ? "border-line-soft opacity-70" : expanded ? "border-line shadow-md" : "border-line-soft hover:border-line shadow-card"
                 }`}
@@ -234,13 +271,22 @@ export default function RoomPage() {
                 )}
 
                 {decided && !expanded && (
-                  <div className="mt-3 text-xs text-ink-tertiary">
-                    已决策:{decisionLabel(s.user_decision!)}
-                    {s.user_decision === "open_human_chat" && !activeSessions.some(as => as.match_id) && (
-                      <span> · 等对方也决定中…</span>
+                  <div className="mt-3 text-xs text-ink-tertiary flex items-center gap-2 flex-wrap">
+                    <span>已决策:{decisionLabel(s.user_decision!)}</span>
+                    {s.user_decision === "open_human_chat" && !linkedSession && (
+                      <span>· 等对方也决定中…</span>
+                    )}
+                    {s.user_decision === "open_human_chat" && linkedSession && (
+                      <Link
+                        href={`/chat/${linkedSession.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-primary-dark hover:underline font-medium"
+                      >
+                        · 进入这场聊天 →
+                      </Link>
                     )}
                     {s.user_decision === "re_dispatch" && (
-                      <span> · Agent 在换话题再聊,稍后会有新简报</span>
+                      <span>· Agent 在换话题再聊,稍后会有新简报</span>
                     )}
                   </div>
                 )}
@@ -310,9 +356,18 @@ export default function RoomPage() {
                     )}
 
                     {decided && (
-                      <div className="text-xs text-ink-tertiary pt-2 border-t border-dashed border-line-soft">
-                        已决策:<strong className="text-ink">{decisionLabel(s.user_decision!)}</strong>
-                        {s.decided_at && <> · {new Date(s.decided_at).toLocaleString("zh-CN")}</>}
+                      <div className="text-xs text-ink-tertiary pt-2 border-t border-dashed border-line-soft flex items-center gap-2 flex-wrap">
+                        <span>已决策:<strong className="text-ink">{decisionLabel(s.user_decision!)}</strong></span>
+                        {s.decided_at && <span>· {new Date(s.decided_at).toLocaleString("zh-CN")}</span>}
+                        {s.user_decision === "open_human_chat" && linkedSession && (
+                          <Link
+                            href={`/chat/${linkedSession.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="ml-auto text-primary-dark hover:underline font-medium"
+                          >
+                            进入这场聊天 →
+                          </Link>
+                        )}
                       </div>
                     )}
                   </div>

@@ -147,6 +147,7 @@ export interface DecisionRequest {
 export interface ChatSessionResponse {
   id: number
   match_id: number
+  source_summary_id?: number | null  // 从哪张简报衍生(旧 session 可能 NULL)
   user_a_id: number
   user_b_id: number
   status: string

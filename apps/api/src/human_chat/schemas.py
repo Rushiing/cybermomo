@@ -12,6 +12,7 @@ class ChatSessionResponse(BaseModel):
 
     id: int
     match_id: int
+    source_summary_id: Optional[int] = None  # 从哪张简报衍生而来(旧 session 可能为 NULL)
     user_a_id: int
     user_b_id: int
     status: str

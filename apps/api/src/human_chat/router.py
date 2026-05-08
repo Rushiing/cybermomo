@@ -86,11 +86,15 @@ async def create_session_from_summary(
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="match 不存在")
 
-    # 已有 session 则返回
+    # 已有 session 则返回 — 同时若 source_summary_id 还没填(旧记录),回填一下
     existing = (await db.execute(
         select(ChatSession).where(ChatSession.match_id == match.id)
     )).scalar_one_or_none()
     if existing is not None:
+        if existing.source_summary_id is None:
+            existing.source_summary_id = summary.id
+            await db.commit()
+            await db.refresh(existing)
         return existing
 
     # 校验双方 open_human_chat decision
@@ -114,6 +118,7 @@ async def create_session_from_summary(
     a, b = sorted([match.user_a_id, match.user_b_id])
     session = ChatSession(
         match_id=match.id,
+        source_summary_id=summary.id,  # 标记衍生来源
         user_a_id=a,
         user_b_id=b,
         status="active",

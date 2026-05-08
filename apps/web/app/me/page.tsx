@@ -28,10 +28,24 @@ interface SoftBlockEntry {
   created_at: string
 }
 
+interface AgentChatHistoryItem {
+  agent_chat_id: number
+  match_id: number
+  peer_user_id: number
+  status: string
+  end_reason?: string | null
+  turns: number
+  started_at?: string | null
+  related_summary_id?: number | null
+  related_verdict?: string | null
+  user_decision?: string | null
+}
+
 export default function MePage() {
   const [me, setMe] = useState<UserMeResponse | null>(null)
   const [md, setMd] = useState<MdDocumentResponse | null>(null)
   const [blocklist, setBlocklist] = useState<SoftBlockEntry[]>([])
+  const [agentChats, setAgentChats] = useState<AgentChatHistoryItem[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { void load() }, [])
@@ -39,14 +53,16 @@ export default function MePage() {
   async function load() {
     setLoading(true)
     try {
-      const [meRes, mdRes, bl] = await Promise.all([
+      const [meRes, mdRes, bl, ac] = await Promise.all([
         api.get<UserMeResponse>("/api/auth/me").catch(() => null),
         api.get<MdDocumentResponse>("/api/md/me").catch(() => null),
         api.get<SoftBlockEntry[]>("/api/room/blocklist").catch(() => []),
+        api.get<AgentChatHistoryItem[]>("/api/agent_chat/me").catch(() => []),
       ])
       setMe(meRes)
       setMd(mdRes)
       setBlocklist(bl || [])
+      setAgentChats(ac || [])
     } finally { setLoading(false) }
   }
 
@@ -130,6 +146,65 @@ export default function MePage() {
                   修改资料
                 </Link>
               </Card>
+            </Section>
+
+            {/* Agent 替我聊过的所有场次 */}
+            <Section title={`Agent 替我聊过谁(${agentChats.length})`}>
+              {agentChats.length === 0 ? (
+                <Card>
+                  <p className="text-ink-secondary text-sm">还没有 Agent 互聊记录。</p>
+                  <p className="text-xs text-ink-tertiary mt-2 leading-relaxed">
+                    生成 .md 之后,Agent 会去认识平台上的其他人 — 那些会在这里。
+                  </p>
+                </Card>
+              ) : (
+                <Card>
+                  <p className="text-xs text-ink-tertiary leading-relaxed mb-4">
+                    我替你聊过的所有人都在这。点开看那场聊了什么 — 你想看的时候才看,选择权在你。
+                  </p>
+                  <div className="space-y-2">
+                    {agentChats.slice(0, 5).map(c => (
+                      <Link
+                        key={c.agent_chat_id}
+                        href={c.related_summary_id ? `/me/agent-chats?focus=${c.related_summary_id}` : `/me/agent-chats`}
+                        className="block bg-bg border border-line-soft hover:border-line rounded-md px-4 py-3 transition"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="font-medium">@user_{c.peer_user_id}</span>
+                              {c.related_verdict && (
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${verdictBadgeClass(c.related_verdict)}`}>
+                                  {c.related_verdict}
+                                </span>
+                              )}
+                              {c.status === "re_dispatched" && (
+                                <span className="text-[10px] text-ink-tertiary border border-line-soft rounded-full px-1.5 py-0.5">已换话题再派</span>
+                              )}
+                              {c.status === "running" && (
+                                <span className="text-[10px] text-primary-dark border border-primary-soft rounded-full px-1.5 py-0.5">聊着</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-ink-tertiary mt-1">
+                              {c.turns} 轮 · {c.started_at ? new Date(c.started_at).toLocaleString("zh-CN") : ""}
+                              {c.user_decision && <> · 已决策:{decisionLabelMe(c.user_decision)}</>}
+                            </div>
+                          </div>
+                          <span className="text-xs text-ink-tertiary flex-shrink-0">查看 →</span>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                  {agentChats.length > 5 && (
+                    <Link
+                      href="/me/agent-chats"
+                      className="mt-4 inline-block text-sm text-primary border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition font-medium"
+                    >
+                      看全部 {agentChats.length} 场 →
+                    </Link>
+                  )}
+                </Card>
+              )}
             </Section>
 
             {/* 拉黑名单 */}
@@ -218,4 +293,20 @@ function DisabledRow({ label, hint }: { label: string; hint: string }) {
       <span className="text-xs text-ink-tertiary">{hint}</span>
     </div>
   )
+}
+
+function verdictBadgeClass(v: string): string {
+  if (v === "来电") return "bg-primary-soft text-primary-dark"
+  if (v === "不合") return "bg-bg border border-line-soft text-ink-tertiary"
+  return "bg-[rgba(255,215,0,0.15)] text-[#9a7800]"
+}
+
+function decisionLabelMe(d: string): string {
+  const map: Record<string, string> = {
+    open_human_chat: "开聊",
+    re_dispatch: "再派",
+    drop: "丢",
+    chat_with_my_agent: "调方向",
+  }
+  return map[d] || d
 }
