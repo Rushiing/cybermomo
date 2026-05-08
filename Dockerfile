@@ -33,4 +33,5 @@ EXPOSE 8000
 
 # 启动命令
 # 注:不用 shell form `CMD foo` 因为要展开 ${PORT};使用 sh -c 显式
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# 先跑 alembic upgrade(若失败用 || true 不阻塞,首次部署或脏环境下 noop),再起服务
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
