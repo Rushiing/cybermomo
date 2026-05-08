@@ -1,0 +1,221 @@
+"use client"
+
+/**
+ * "我" tab · 用户身份级事项
+ *
+ * 按 cybermomo/交互拆解/_信息架构.md §5:
+ *   - 我的 .md(可看,改走 Agent 对话 — Phase 4 之后)
+ *   - 我的资料(可改 → 跳 /md/basic)
+ *   - 拉黑名单(软拉黑可解除)
+ *   - 通知设置(MVP 不实装)
+ *   - 设置 / 帐号(退出 / 注销)
+ *   - 重读 Onboarding
+ */
+import Link from "next/link"
+import { useEffect, useState } from "react"
+
+import Topbar from "@/components/Topbar"
+import {
+  api,
+  type MdDocumentResponse,
+  type UserMeResponse,
+  getMockUserId,
+} from "@/lib/api"
+
+interface SoftBlockEntry {
+  blocked_user_id: number
+  reason?: string | null
+  created_at: string
+}
+
+export default function MePage() {
+  const [me, setMe] = useState<UserMeResponse | null>(null)
+  const [md, setMd] = useState<MdDocumentResponse | null>(null)
+  const [blocklist, setBlocklist] = useState<SoftBlockEntry[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => { void load() }, [])
+
+  async function load() {
+    setLoading(true)
+    try {
+      const [meRes, mdRes, bl] = await Promise.all([
+        api.get<UserMeResponse>("/api/auth/me").catch(() => null),
+        api.get<MdDocumentResponse>("/api/md/me").catch(() => null),
+        api.get<SoftBlockEntry[]>("/api/room/blocklist").catch(() => []),
+      ])
+      setMe(meRes)
+      setMd(mdRes)
+      setBlocklist(bl || [])
+    } finally { setLoading(false) }
+  }
+
+  async function unblock(uid: number) {
+    if (!confirm(`解除对 user_${uid} 的软拉黑?`)) return
+    try {
+      await api.del(`/api/room/blocklist/${uid}`)
+      await load()
+    } catch (e: any) {
+      alert(`解除失败:${e?.detail || e?.message}`)
+    }
+  }
+
+  return (
+    <div className="min-h-screen">
+      <Topbar active="me" />
+
+      <main className="max-w-[640px] mx-auto px-6 py-8 pb-24">
+        {loading && <p className="text-center py-12 text-ink-secondary">加载中…</p>}
+
+        {!loading && (
+          <>
+            {/* 头像 + 昵称 */}
+            <section className="flex items-center gap-4 mb-8">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary flex items-center justify-center text-white text-[22px] font-semibold flex-shrink-0">
+                {me?.profile?.nickname?.charAt(0) || "?"}
+              </div>
+              <div>
+                <div className="text-xl font-semibold">{me?.profile?.nickname || "未设置昵称"}</div>
+                <div className="text-sm text-ink-secondary">
+                  {me?.profile?.age_band || "—"} · {me?.profile?.gender || "—"} · {me?.profile?.mbti || "—"}
+                </div>
+                <div className="text-xs text-ink-tertiary mt-1">
+                  user_id {me?.id || `(mock ${getMockUserId()})`} · {me?.email || "—"}
+                </div>
+              </div>
+            </section>
+
+            {/* 我的 .md */}
+            <Section title="我的 .md">
+              {md ? (
+                <Card>
+                  <div className="text-base font-semibold text-primary-dark mb-2">{md.portrait_title}</div>
+                  <div className="text-xs text-ink-tertiary mb-3">
+                    版本 v{md.version} · {new Date(md.created_at).toLocaleString("zh-CN")} · {md.profile_version}
+                  </div>
+                  {md.portrait_body[0] && (
+                    <p className="text-sm text-ink-secondary leading-relaxed">{md.portrait_body[0]}</p>
+                  )}
+                  <div className="mt-4 text-xs text-ink-tertiary leading-relaxed">
+                    🔒 .md 不外露铁律:这份档案只你能看,任何其他用户都看不到原文。
+                    要改方向,以后通过<strong className="text-ink">「跟自己 Agent 对话」</strong>(Phase 4 之后)。
+                    现在可以重做问卷整体覆盖。
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <Link href="/md/quiz" className="text-sm text-primary border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition font-medium">
+                      重做 17 题
+                    </Link>
+                  </div>
+                </Card>
+              ) : (
+                <Card>
+                  <p className="text-ink-secondary">还没生成 .md。</p>
+                  <Link href="/md/quiz" className="inline-block mt-3 text-sm text-primary font-medium">
+                    去做问卷 →
+                  </Link>
+                </Card>
+              )}
+            </Section>
+
+            {/* 我的资料 */}
+            <Section title="我的资料">
+              <Card>
+                <div className="text-sm space-y-2 text-ink">
+                  <Row label="昵称" value={me?.profile?.nickname || "未设置"} />
+                  <Row label="年龄段" value={me?.profile?.age_band || "未设置"} />
+                  <Row label="性别" value={me?.profile?.gender || "未设置"} />
+                  <Row label="MBTI" value={me?.profile?.mbti || "未设置"} />
+                </div>
+                <Link href="/md/basic" className="mt-4 inline-block text-sm text-primary border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition font-medium">
+                  修改资料
+                </Link>
+              </Card>
+            </Section>
+
+            {/* 拉黑名单 */}
+            <Section title={`软拉黑(${blocklist.length})`}>
+              {blocklist.length === 0 ? (
+                <Card><p className="text-ink-secondary text-sm">还没拉黑任何人。</p></Card>
+              ) : (
+                <Card>
+                  <div className="space-y-3">
+                    {blocklist.map(b => (
+                      <div key={b.blocked_user_id} className="flex items-center justify-between gap-3 py-2 border-b border-line-soft last:border-b-0">
+                        <div>
+                          <div className="text-sm font-medium">user_{b.blocked_user_id}</div>
+                          <div className="text-xs text-ink-tertiary">
+                            {b.reason || "未填原因"} · {new Date(b.created_at).toLocaleString("zh-CN")}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => unblock(b.blocked_user_id)}
+                          className="text-xs text-ink-secondary hover:text-warn px-3 py-1.5 border border-line-soft rounded-md hover:border-warn transition"
+                        >
+                          解除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+              <p className="text-xs text-ink-tertiary mt-2 leading-relaxed">
+                软拉黑只影响以后的匹配推荐 — 不会通知对方。
+                平台底线拉黑(违规留底)是另一回事,你看不到也解不了。
+              </p>
+            </Section>
+
+            {/* 设置 */}
+            <Section title="设置 / 帐号">
+              <Card>
+                <div className="space-y-2 text-sm">
+                  <DisabledRow label="通知设置" hint="MVP 阶段不主动推,后续接入" />
+                  <DisabledRow label="重读 Onboarding" hint="后续接入" />
+                  <DisabledRow label="退出登录" hint="OAuth 接入后启用" />
+                  <DisabledRow label="注销账户" hint="MVP 阶段邮件人工兜底" />
+                </div>
+                <p className="text-xs text-ink-tertiary mt-3 leading-relaxed">
+                  开发模式 · 用左下角 DEV 切 mock_user_id
+                </p>
+              </Card>
+            </Section>
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-8">
+      <h2 className="text-xs text-ink-secondary tracking-[0.04em] mb-3 px-1">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-bg-elevated border border-line-soft rounded-md p-5 shadow-card">
+      {children}
+    </div>
+  )
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1.5">
+      <span className="text-ink-secondary text-xs flex-shrink-0">{label}</span>
+      <span className="text-ink">{value}</span>
+    </div>
+  )
+}
+
+function DisabledRow({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2 opacity-50">
+      <span>{label}</span>
+      <span className="text-xs text-ink-tertiary">{hint}</span>
+    </div>
+  )
+}

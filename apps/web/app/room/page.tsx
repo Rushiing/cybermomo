@@ -10,6 +10,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
+import Topbar from "@/components/Topbar"
 import {
   api,
   type RoomStatusResponse,
@@ -252,28 +253,3 @@ function ActionBtn(p: { label: string; primary?: boolean; warn?: boolean; loadin
   )
 }
 
-function Topbar(props: { active: "plaza" | "room" | "me" }) {
-  return (
-    <header className="bg-bg border-b border-line-soft px-6 py-3.5 flex items-center justify-between sticky top-0 z-10">
-      <div className="font-semibold flex items-center gap-2">
-        <span className="w-2 h-2 rounded-full bg-primary" />
-        CyberMOMO
-      </div>
-      <nav className="flex gap-3">
-        {(["plaza", "room", "me"] as const).map(tab => {
-          const label = tab === "plaza" ? "广场" : tab === "room" ? "个人房间" : "我"
-          const active = props.active === tab
-          return (
-            <button
-              key={tab}
-              className={`px-3.5 py-1.5 rounded-full text-sm transition ${
-                active ? "bg-ink text-bg" : "text-ink-secondary hover:text-ink"
-              }`}
-            >{label}</button>
-          )
-        })}
-      </nav>
-      <Link href="/" className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold bg-gradient-to-br from-[#C7E8D5] to-primary">M</Link>
-    </header>
-  )
-}
