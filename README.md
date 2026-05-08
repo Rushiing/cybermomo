@@ -8,84 +8,139 @@
 cybermomo/
 ├── apps/
 │   ├── api/              # FastAPI 后端(Python 3.11+)
+│   │   ├── alembic/      # 数据库迁移
+│   │   ├── src/          # 业务模块(auth/md/match/agent_chat/...)
+│   │   └── Dockerfile    # api service 镜像
 │   └── web/              # Next.js 14 前端(TypeScript + Tailwind)
+│       ├── app/          # App Router 页面
+│       ├── components/   # 共享组件
+│       ├── lib/          # API client + v3 题库 + 规则引擎
+│       └── Dockerfile    # web service 镜像
 ├── legacy/
-│   └── prototype-v0.4/   # 盲测期 prototype(LLM 生成 .md)· 已 deprecated
-├── scripts/              # 数据迁移、运维脚本
-├── Dockerfile            # 后端 service 镜像构建(Railway 默认 service)
+│   └── prototype-v0.4/   # 盲测期 prototype(已 deprecated)
+├── scripts/              # 数据迁移 / 运维 / demo seeder
+├── Dockerfile            # api service(根目录默认 service)
 ├── docker-compose.yml    # 本地 Postgres + pgvector
-├── railway.json          # Railway 部署配置(指向 Dockerfile)
+├── railway.json          # api service 部署配置
 └── .env.example          # 环境变量示例
 ```
 
-## 设计文档
-
-完整设计文档在另一个 vault:`../cybermomo/`
+## 设计文档(在另一个 vault)
 
 - **PRD** · `cybermomo/PRD/PRD-CyberMOMO-v1.1.md`
 - **工程架构** · `cybermomo/工程拆解/_工程架构.md`
 - **数据模型** · `cybermomo/工程拆解/_数据模型.md`(15 张表)
 - **交互设计** · `cybermomo/交互拆解/`(原则 / IA / 调性 / happy path)
-- **HTML 原型** · `cybermomo/DEMO/mvp/`(13 屏 happy path 可点点点)
+- **HTML 原型** · `cybermomo/DEMO/mvp/`(13 屏 happy path)
 
-## 快速开始
+## 快速开始(本地)
 
 ```bash
-# 1. 起本地数据库
+# 1. 起本地 DB
 docker-compose up -d
 
 # 2. 后端
 cd apps/api
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp ../../.env.example ../../.env  # 填写
+cp ../../.env.example ../../.env   # 填写 GLM_API_KEY / ANTHROPIC_API_KEY 等
+alembic upgrade head
 uvicorn main:app --reload --port 8787
 
 # 3. 前端(另一个 terminal)
 cd apps/web
-pnpm install   # 或 npm i
-pnpm dev       # http://localhost:3000
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:8787 npm run dev
 
 # 4. 验证
 curl http://localhost:8787/healthz
+open http://localhost:3000
 ```
 
-## 部署
+## 部署到 Railway
 
-部署到 Railway。
+### service-api(默认 service · 后端)
+- Root Directory: `(repo root)`
+- Builder: Dockerfile
+- Postgres 插件:自动注入 `DATABASE_URL`(代码会自动归一为 asyncpg 格式)
+- preDeployCommand:`alembic upgrade head`
+- 必填 Variables:`GLM_API_KEY` / `ANTHROPIC_API_KEY` / `JWT_SECRET` / `CORS_ORIGINS` / `ADMIN_SECRET`
 
-- **service-api**:跑 `apps/api/`(本 repo 默认 service)
-  - 域名:cybermomo 主域名(已绑定)
-  - Postgres + pgvector 通过 Railway Postgres 插件提供
-  - 配置 env(见 `.env.example`)
-- **service-web**:跑 `apps/web/`(后续可选添加)
-  - 也可部署到 Vercel(Next.js 原生友好)
+### service-web(独立 service · 前端)
+- Root Directory: `apps/web`
+- Builder: Dockerfile
+- 必填 Variables:`NEXT_PUBLIC_API_URL=https://<api 域名>`
 
-## 历史
+### Cron Job(可选 · 每小时跑 24h 沉默 sweep)
+```
+curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
+     https://<api 域名>/api/admin/observation-sweep
+```
 
-- `legacy/prototype-v0.4/` 是盲测期 prototype(LLM 生成 markdown 的 .md 创建路径),MVP 阶段已 deprecated。保留作为历史 + 数据迁移参考(盲测期收集的数据需要 cutover 时迁到新表)
-- 当前 git remote 接管自盲测期项目;首次 monorepo 改造从 commit `fa43810` 之后开始
+## API 概览
+
+```
+注册 / 我          GET /api/auth/me / PUT /api/auth/me/profile
+.md 创建           POST /api/md(自动触发 pipeline)/ GET /api/md/me
+匹配               POST /api/match/run / GET /api/match/me
+简报               GET / 单个 / 决策 /api/summary/{me,id,id/decision}
+个人房间           GET /api/room/status / blocklist 管理
+真人聊天           POST /api/chat/sessions/from-summary/{summaryId}
+                   GET / POST messages / callout / briefing / exit
+Admin(cron 调)   POST /api/admin/observation-sweep
+                   POST /api/admin/rerun-pipeline/{user_id}
+```
+
+## 完整 pipeline(POST /api/md 自动触发)
+
+```
+matching engine      → matches + matchpoints (纯 compute,无 LLM)
+desensitize Agent    → match_hooks(GLM-5)
+agent_chat engine    → agent_chat_messages(GLM-5,< 12 轮)
+summary Agent        → summaries(Claude · 给两位 host 各一份)
+```
+
+真人聊天链路(用户决策开聊后):
+```
+prebriefing Agent    → §4.9 简报(Claude)
+chat_session         → 双方真人 messages
+callout Agent        → 私有 callout(Claude · host 不可见对方)
+exit / 24h 沉默       → observation Agent → 观察报告(Claude)
+```
+
+## 测试 / Seeder
+
+```bash
+# 一键创建 3 个差异化 mock 用户(自动触发 pipeline)
+python scripts/seed_demo_users.py
+
+# 自定义 user_id + API
+USER_IDS=10,11,12 API_URL=http://localhost:8787 python scripts/seed_demo_users.py
+
+# 手动 curl 测
+curl -H "X-Mock-User-Id: 1" https://<api 域名>/api/summary/me
+```
 
 ## Phase 进展
 
 | Phase | 状态 |
 |---|---|
-| **Phase 0 · 地基** | ✅ 已落(monorepo + 15 表 schema + LLM 网关 + auth/md router skeleton + smoke test) |
-| Phase 1 · 注册 + .md 创建 | 下一步:Google OAuth 接入 + POST /api/md 实装 |
-| Phase 2 · 匹配 + Agent 互聊 | 待启动 |
-| Phase 3 · 摘要 + 个人房间 | 待启动 |
-| Phase 4 · 真人聊天 + callout + 观察报告 | 待启动 |
-| Phase 5 · 联调 + 朋友盘内测 | 待启动 |
+| **Phase 0 · 地基** | ✅ monorepo + 15 表 schema + LLM 网关 + Sentry + admin sweep |
+| **Phase 1 · 注册 + .md 创建** | ✅ 后端实装(mock auth)+ 前端 onboarding/basic/quiz/review |
+| **Phase 2 · 匹配 + Agent 互聊** | ✅ matching engine(纯 compute)+ desensitize + agent_chat turn engine |
+| **Phase 3 · 摘要 + 个人房间** | ✅ summary Agent + room endpoints + 简报卡决策 |
+| **Phase 4 · 真人聊天 + callout + 观察** | ✅ prebriefing + chat session + callout drawer + observation |
+| **Phase 5 · 朋友盘内测** | 进行中 |
 
-## 部署状态
+## 还没做(都不阻塞 MVP 内测)
 
-- ✅ Railway 服务运行中,Dockerfile 构建,健康检查通
-- ✅ Postgres + pgvector,15 张表创建(alembic init_v1)
-- ✅ 每次 push 自动 `alembic upgrade head`(railway.json preDeployCommand)
+- **OAuth 接入**(目前用 X-Mock-User-Id 头 + dev 自动 upsert)
+- **Prompt 入 prompt_versions 表**(目前 inline Python 字符串,后续 PE 阶段改 DB 驱动)
+- **图片上传**(真人聊天 content_type=image 暂时只能传 URL)
+- **structured logging**(目前 print)
+- **rate limiting / cost cap**
 
-## Phase 0 还可补的(P1,不阻塞 Phase 1)
+## 历史
 
-- prompt seed 脚本(把 v0 prompts 抽出来塞进 prompt_versions 表,Phase 2 启用)
-- Sentry 接入
-- structured logging(目前用 print)
-- 前端 service 部署(Railway 第二个 service 跑 apps/web/)
+- `legacy/prototype-v0.4/` 是盲测期 prototype(LLM 生成 markdown 的 .md 创建)。MVP 已切换为 v3 规则引擎。
+- 当前 git remote 接管自盲测期项目;monorepo 改造从 commit `fa43810` 之后开始
