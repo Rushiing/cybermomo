@@ -43,8 +43,15 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = Field(default="")
 
     # LLM
+    # 测试期:统一走 百炼(DashScope)OpenAI-compatible 端点
+    # base_url=https://dashscope.aliyuncs.com/compatible-mode/v1
+    # 默认模型:deepseek-v4-flash(可被 LLM_MODEL 覆盖)
+    dashscope_api_key: str = Field(default="")
+    llm_model: str = Field(default="deepseek-v4-flash")
+
+    # 兼容老变量(GLM_API_KEY 是 dashscope 的同一个 key,允许沿用)
     glm_api_key: str = Field(default="")
-    anthropic_api_key: str = Field(default="")
+    anthropic_api_key: str = Field(default="")  # 备用,测试期不需要
     zhipu_api_key: str = Field(default="")
 
     # Sentry
@@ -63,6 +70,11 @@ class Settings(BaseSettings):
     @property
     def is_dev(self) -> bool:
         return self.env == "dev"
+
+    @property
+    def effective_dashscope_key(self) -> str:
+        """优先 DASHSCOPE_API_KEY,fallback 到 GLM_API_KEY(同一 key 不同名)"""
+        return self.dashscope_api_key or self.glm_api_key
 
 
 @lru_cache

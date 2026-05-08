@@ -1,71 +1,63 @@
 """
-LLM 网关 · provider 抽象 + 路由 + 调用日志
+LLM 网关 · 测试期统一走 百炼(DashScope)OpenAI-compatible 端点
 
-业务模块**只调** `await llm_chat(role, messages, ...)`,不直接调 provider SDK。
+- base_url:https://dashscope.aliyuncs.com/compatible-mode/v1
+- 默认模型:deepseek-v4-flash(LLM_MODEL env 覆盖)
+- API 密钥:DASHSCOPE_API_KEY(fallback GLM_API_KEY)
 
-Provider 路由表(MVP 写死,后续可改为从 DB 读 / 热更):
-- 给 Agent 互聊 / 脱敏 / 内部分析:GLM-5(便宜、中文好)
-- 给宿主侧 Agent(摘要 / 观察 / callout / 简报 / 全局对话):Claude(指令遵循 + 朋友式八卦语气稳)
-
-GLM-5 走 dashscope 的 Anthropic 兼容端点,所以两个 provider 都用 Anthropic SDK。
+业务模块只调 `await llm_chat(role, messages, system=..., db=...)`,
+不直接调 SDK。Provider 路由表保留(目前所有 role 都指向 deepseek-v4-flash),
+后续要按 role 切模型只改这一处即可。
 """
 import time
 from typing import Optional
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.llm.types import ChatResponse, LLMRole, Message
 from src.llm.models import LlmCallLog
 from src.shared.settings import get_settings
 
-# ========================================
-# 路由表
-# ========================================
-
-# (provider, model)
-_PROVIDER_BY_ROLE: dict[LLMRole, tuple[str, str]] = {
-    "agent_chat":   ("glm5",   "glm-4-plus"),
-    "desensitize":  ("glm5",   "glm-4-plus"),
-    "summary":      ("claude", "claude-sonnet-4-5"),
-    "prebriefing":  ("claude", "claude-sonnet-4-5"),
-    "callout":      ("claude", "claude-sonnet-4-5"),
-    "observation":  ("claude", "claude-sonnet-4-5"),
-    "host_agent":   ("claude", "claude-sonnet-4-5"),
-    "embedding":    ("zhipu",  "embedding-3"),  # 单独走 embedding 路径,见 embed.py
-}
-
 
 # ========================================
-# Provider 客户端工厂(lazy 单例)
+# 路由表 — 所有 role 指向 deepseek-v4-flash(测试期单一模型)
 # ========================================
 
-_clients_cache: dict[str, AsyncAnthropic] = {}
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
-def _get_client(provider: str) -> AsyncAnthropic:
-    """构造 Anthropic SDK 客户端(GLM-5 / Claude 共享 SDK)"""
-    if provider in _clients_cache:
-        return _clients_cache[provider]
-
+def _model_for_role(role: LLMRole) -> str:
+    """
+    role → model 路由。
+    测试期所有 role 走 settings.llm_model(默认 deepseek-v4-flash)。
+    后续要按 role 切模型,在这里加分支。
+    """
     settings = get_settings()
+    if role == "embedding":
+        # 测试期暂不用 embedding(matching 走纯 compute)
+        # 真要用走 dashscope text-embedding-v3
+        return "text-embedding-v3"
+    return settings.llm_model
 
-    if provider == "glm5":
-        if not settings.glm_api_key:
-            raise RuntimeError("GLM_API_KEY 未配置")
-        client = AsyncAnthropic(
-            api_key=settings.glm_api_key,
-            base_url="https://coding.dashscope.aliyuncs.com/apps/anthropic",
-        )
-    elif provider == "claude":
-        if not settings.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY 未配置")
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    else:
-        raise ValueError(f"未知 provider: {provider}")
 
-    _clients_cache[provider] = client
-    return client
+# ========================================
+# Provider 客户端(单例)
+# ========================================
+
+_client: Optional[AsyncOpenAI] = None
+
+
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is not None:
+        return _client
+    settings = get_settings()
+    api_key = settings.effective_dashscope_key
+    if not api_key:
+        raise RuntimeError("DASHSCOPE_API_KEY(或 GLM_API_KEY)未配置")
+    _client = AsyncOpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
+    return _client
 
 
 # ========================================
@@ -87,12 +79,18 @@ async def llm_chat(
     related_id: Optional[int] = None,
 ) -> ChatResponse:
     """
-    异步调用 LLM。按 role 路由到对应 provider/model;调用结束自动写入 llm_call_log。
-
-    传入 `db` 时会写日志;不传则只调用不写日志(适合脚本场景)。
+    异步调用 LLM。OpenAI-compatible 接口。
+    传入 `db` 时会写 llm_call_log;不传则只调用不写日志(适合脚本场景)。
     """
-    provider, model = _PROVIDER_BY_ROLE[role]
-    client = _get_client(provider)
+    model = _model_for_role(role)
+    client = _get_client()
+
+    # 拼 OpenAI 格式 messages(system 是第一条,不是 kwarg)
+    api_messages: list[dict] = []
+    if system:
+        api_messages.append({"role": "system", "content": system})
+    for m in messages:
+        api_messages.append({"role": m.role, "content": m.content})
 
     started = time.monotonic()
     error: Optional[str] = None
@@ -100,18 +98,17 @@ async def llm_chat(
     input_tokens = output_tokens = None
 
     try:
-        resp = await client.messages.create(
+        resp = await client.chat.completions.create(
             model=model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            system=system or "",
+            messages=api_messages,
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        )
-        input_tokens = resp.usage.input_tokens if resp.usage else None
-        output_tokens = resp.usage.output_tokens if resp.usage else None
+        choice = resp.choices[0] if resp.choices else None
+        text = (choice.message.content or "") if choice else ""
+        if resp.usage:
+            input_tokens = resp.usage.prompt_tokens
+            output_tokens = resp.usage.completion_tokens
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
         raise
@@ -124,7 +121,7 @@ async def llm_chat(
                 log = LlmCallLog(
                     user_id=user_id,
                     role=role,
-                    provider=provider,
+                    provider="dashscope",
                     model=model,
                     prompt_id=prompt_id,
                     input_tokens=input_tokens,
@@ -137,13 +134,12 @@ async def llm_chat(
                 db.add(log)
                 await db.commit()
             except Exception as log_err:
-                # 日志写失败不重抛
                 print(f"[llm gateway] log write failed: {log_err}")
 
     return ChatResponse(
         text=text,
         model=model,
-        provider=provider,
+        provider="dashscope",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         latency_ms=latency_ms,
