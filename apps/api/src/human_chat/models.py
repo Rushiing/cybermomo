@@ -31,6 +31,11 @@ class ChatSession(Base):
     match_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("matches.id", ondelete="CASCADE"), nullable=False
     )
+    # 从哪张简报衍生而来(再派之后,同 match 多张简报里只有触发者那张)
+    # ON DELETE SET NULL:简报被治理删时,session 不应被殃及
+    source_summary_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("summaries.id", ondelete="SET NULL")
+    )
     user_a_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -53,6 +58,7 @@ class ChatSession(Base):
         Index("idx_chat_sessions_match", "match_id"),
         Index("idx_chat_sessions_user_a", "user_a_id", "status"),
         Index("idx_chat_sessions_user_b", "user_b_id", "status"),
+        Index("idx_chat_sessions_source_summary", "source_summary_id"),
         Index(
             "idx_chat_sessions_silent",
             "last_message_at",
