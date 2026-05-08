@@ -10,6 +10,7 @@ from typing import Annotated, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.models import User, UserProfile
@@ -53,19 +54,32 @@ async def get_current_user(
                 detail=f"user_id={uid} 不存在",
             )
         # dev 环境自动 upsert 一个占位 user(让前端联调不卡)
-        user = User(
-            id=uid,
-            google_sub=f"mock-{uid}",
-            email=f"mock-{uid}@cybermomo.dev",
-            google_name=f"MockUser{uid}",
-            is_adult_confirmed=True,
-        )
-        db.add(user)
-        # 同步建一个最简 profile
-        profile = UserProfile(user_id=uid, nickname=f"Mock{uid}")
-        db.add(profile)
-        await db.commit()
-        await db.refresh(user)
+        # 注:前端 page load 会并发打多个 endpoint,所有都触发 upsert → race。
+        # catch IntegrityError 后 re-fetch(谁先 INSERT 谁赢,后到的拿到现存的就好)。
+        try:
+            user = User(
+                id=uid,
+                google_sub=f"mock-{uid}",
+                email=f"mock-{uid}@cybermomo.dev",
+                google_name=f"MockUser{uid}",
+                is_adult_confirmed=True,
+            )
+            db.add(user)
+            profile = UserProfile(user_id=uid, nickname=f"Mock{uid}")
+            db.add(profile)
+            await db.commit()
+            await db.refresh(user)
+        except IntegrityError:
+            await db.rollback()
+            # 别的并发请求已经创了,re-fetch
+            user = (await db.execute(
+                select(User).where(User.id == uid)
+            )).scalar_one_or_none()
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="user upsert race condition unresolvable",
+                )
 
     return user
 
