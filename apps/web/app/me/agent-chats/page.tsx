@@ -10,7 +10,7 @@
  */
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 
 import AgentChatViewer from "@/components/AgentChatViewer"
 import Topbar from "@/components/Topbar"
@@ -29,7 +29,28 @@ interface AgentChatHistoryItem {
   user_decision?: string | null
 }
 
-export default function MyAgentChatsPage() {
+// Next.js App Router 要求 useSearchParams() 包在 Suspense 里,
+// 否则 build 时静态预渲染失败(missing-suspense-with-csr-bailout)
+export default function Page() {
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <MyAgentChatsPage />
+    </Suspense>
+  )
+}
+
+function PageFallback() {
+  return (
+    <div className="min-h-screen">
+      <Topbar active="me" />
+      <main className="max-w-[640px] mx-auto px-6 py-8 pb-24">
+        <p className="text-center py-12 text-ink-secondary">加载中…</p>
+      </main>
+    </div>
+  )
+}
+
+function MyAgentChatsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const focusId = searchParams.get("focus")
