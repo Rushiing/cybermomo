@@ -9,7 +9,7 @@
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -199,18 +199,19 @@ async def get_agent_chat_for_summary(
 async def make_decision(
     summary_id: int,
     payload: DecisionRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = CurrentUser,
     db: AsyncSession = Depends(get_session),
 ):
     """
     用户在简报卡上的决策。
     - open_human_chat:开真人聊天(等对方也决策)
-    - re_dispatch:同 Agent 换话题再派一次
+    - re_dispatch:同 Agent 换话题再派一次(后台 pipeline 跑新一场)
     - drop:丢(软拉黑该用户)
-    - chat_with_my_agent:跟自己 Agent 调方向
+    - chat_with_my_agent:跟自己 Agent 调方向(MVP:仅记录)
 
-    MVP 阶段 re_dispatch / chat_with_my_agent 不做下游动作(只记录决策);
     drop 会自动加软拉黑,wildcard 后续会排除。
+    re_dispatch 会触发后台任务:同 match 同 Agent 换话题再聊一场,跑完生成新简报。
     """
     s = (await db.execute(
         select(Summary).where(
@@ -273,5 +274,15 @@ async def make_decision(
 
     await db.commit()
     await db.refresh(decision)
+
+    # re_dispatch:决策提交后,后台跑同 match 的新一场 agent_chat + summary
+    if payload.decision == "re_dispatch":
+        from src.match.pipeline import run_redispatch_for_summary
+
+        background_tasks.add_task(
+            run_redispatch_for_summary,
+            summary_id=s.id,
+            requester_user_id=current_user.id,
+        )
 
     return _to_response(s, decision)

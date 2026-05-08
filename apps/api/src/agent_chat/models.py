@@ -16,7 +16,6 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -33,7 +32,8 @@ class AgentChat(Base):
         BigInteger,
         ForeignKey("matches.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # MVP 简化:一对 match 只跑一次互聊
+        # 注:不再 unique。
+        # 第一场结束(done_*)后,标记为 're_dispatched',再派一次会新建一行 status='running'
     )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default="running", server_default="running"

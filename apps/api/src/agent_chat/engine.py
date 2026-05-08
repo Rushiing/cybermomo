@@ -12,7 +12,7 @@ A、B 两个 Agent 通过结构化 JSON 消息交互,代表各自宿主互相了
 end conditions:
   - intent='wrap' 且对方上一条也 wrap → done_natural
   - private_signal.boundary_hit='铁律' → done_terminated(立即终止)
-  - turn 数达到上限(MVP 12 轮) → done_natural
+  - turn 数达到上限(默认 8 轮) → done_natural
 
 铁律:对方的 private_signals 在 history 里**完全不出现**(filter 由本模块负责)。
 完整 prompt v0 见 cybermomo/落地拆解/04-Agent互聊/01-平台system prompt-v0.md
@@ -71,6 +71,12 @@ PLATFORM_SYSTEM = """\
 - 中段:可以延续话题(同 topic_ref) / 切换(新 topic_ref) / wrap
 - intent='wrap' = 自然结束信号;**双方连续 wrap 才能正式结束**
 - public_signals 对方 Agent 看得到;private_signals **绝对不让对方看到**
+
+节奏(重要):
+- 这是初筛,不是闲聊。3-5 轮把核心契合判断清楚就够了
+- 摸到关键信号(对方对核心话题有兴趣 / 价值观契合或冲突)就可以 wrap
+- 反复 probe 同一话题没意义 — 已经清楚了就 wrap,别为聊而聊
+- 触到铁律或明显不合 → 直接 reject + wrap,不用客气
 """
 
 TURN_PROMPT_TEMPLATE = """\
@@ -79,11 +85,18 @@ TURN_PROMPT_TEMPLATE = """\
 
 可用话题钩子(只你能看到 — 别人的 hooks 你看不到):
 {hooks}
-
+{avoid_block}
 历史对话(双方 utterance + 双方 public_signals + **只你自己** 的 private_signals):
 {history}
 
 现在轮到你说话。请按 schema 返回**一条** JSON 消息。
+本场最多 {max_turns} 轮,当前第 {turn_number} 轮 — 后半段请逐渐收尾。
+"""
+
+AVOID_BLOCK_TEMPLATE = """\
+
+**这场是再派一次** — 上一场已经聊过下面这些话题,这次请避开,换别的钩子探探:
+{avoid_refs}
 """
 
 
@@ -147,11 +160,14 @@ async def run_agent_chat(
     db: AsyncSession,
     *,
     match: Match,
-    max_turns: int = 12,
+    max_turns: int = 8,
+    avoid_topic_refs: Optional[list[str]] = None,
 ) -> AgentChat:
     """
     给 match 启 Agent 互聊。
     返回 AgentChat 实体(status 已结算)。
+
+    avoid_topic_refs:再派一次时传上一场出现过的 topic_ref 列表,提示 Agent 换话题。
     """
     # 创建 agent_chat
     chat = AgentChat(match_id=match.id, status="running")
@@ -198,9 +214,11 @@ async def run_agent_chat(
                 chat=chat,
                 speaker_user_id=speaker_user_id,
                 turn_number=turn,
+                max_turns=max_turns,
                 md_profile=_summarize_md_for_prompt(profile_by_user[speaker_user_id]),
                 hooks=hooks,
                 history=messages,
+                avoid_topic_refs=avoid_topic_refs or [],
             )
         except Exception as e:
             print(f"[agent_chat] turn {turn} LLM failed: {e}")
@@ -259,15 +277,26 @@ async def _ask_one_turn(
     chat: AgentChat,
     speaker_user_id: int,
     turn_number: int,
+    max_turns: int,
     md_profile: dict,
     hooks: list[MatchHook],
     history: list[AgentChatMessage],
+    avoid_topic_refs: list[str],
 ) -> dict | None:
     """跑一轮 LLM,返回 parsed 字典 or None"""
+    avoid_block = ""
+    if avoid_topic_refs:
+        avoid_block = AVOID_BLOCK_TEMPLATE.format(
+            avoid_refs=json.dumps(avoid_topic_refs, ensure_ascii=False)
+        )
+
     user_payload = TURN_PROMPT_TEMPLATE.format(
         md_profile=json.dumps(md_profile, ensure_ascii=False, indent=2),
         hooks=_format_hooks_for_speaker(hooks, speaker_user_id),
+        avoid_block=avoid_block,
         history=_format_history_for_speaker(history, speaker_user_id),
+        turn_number=turn_number,
+        max_turns=max_turns,
     )
 
     resp = await llm_chat(
