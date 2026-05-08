@@ -7,12 +7,14 @@
 - POST   /api/summary/{id}/redispatch (Phase 4) 同 Agent 换话题再派一次
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.auth.deps import CurrentUser
 from src.auth.models import User
 from src.match.models import Match
@@ -103,6 +105,94 @@ async def get_summary(
     )).scalar_one_or_none()
 
     return _to_response(s, decision)
+
+
+# ========================================
+# Agent 互聊 messages 查看(给宿主自己看的)
+# ========================================
+
+class AgentChatMessageView(BaseModel):
+    """暴露给宿主的 Agent 互聊消息(已脱敏)
+    - 自己 Agent 说的话:全部 utterance + 自己的 public + private signals
+    - 对方 Agent 说的话:utterance + public_signals(intent, topic_ref)
+                         · private_signals **不暴露**(铁律)
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    speaker: str  # "host" | "peer"
+    turn: int
+    topic_ref: str
+    intent: str
+    utterance: str
+    public_signals: dict[str, Any]
+    own_private_signals: Optional[dict[str, Any]] = None  # 仅当 speaker=host 时填
+
+
+class AgentChatViewResponse(BaseModel):
+    agent_chat_id: int
+    status: str
+    end_reason: Optional[str] = None
+    turns: int
+    messages: list[AgentChatMessageView]
+
+
+@router.get("/{summary_id}/agent_chat", response_model=AgentChatViewResponse)
+async def get_agent_chat_for_summary(
+    summary_id: int,
+    current_user: User = CurrentUser,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    返回该简报对应的 Agent 互聊消息(给宿主看)。
+    - 仅 summary.host_user_id == current_user 才能查
+    - 对方 Agent 的 private_signals 一律不暴露(铁律)
+    - 自己 Agent 的 private_signals 可以看
+
+    用于"看看 Agent 们都聊了什么"入口。
+    """
+    s = (await db.execute(
+        select(Summary).where(
+            Summary.id == summary_id,
+            Summary.host_user_id == current_user.id,
+        )
+    )).scalar_one_or_none()
+    if s is None or s.agent_chat_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="简报不存在或没有关联 Agent 互聊")
+
+    chat = (await db.execute(
+        select(AgentChat).where(AgentChat.id == s.agent_chat_id)
+    )).scalar_one_or_none()
+    if chat is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Agent 互聊不存在")
+
+    msgs = (await db.execute(
+        select(AgentChatMessage)
+        .where(AgentChatMessage.agent_chat_id == chat.id)
+        .order_by(AgentChatMessage.turn)
+    )).scalars().all()
+
+    out_msgs = [
+        AgentChatMessageView(
+            id=m.id,
+            speaker="host" if m.speaker_user_id == current_user.id else "peer",
+            turn=m.turn,
+            topic_ref=m.topic_ref,
+            intent=m.intent,
+            utterance=m.utterance,
+            public_signals=m.public_signals or {},
+            own_private_signals=m.private_signals if m.speaker_user_id == current_user.id else None,
+        )
+        for m in msgs
+    ]
+
+    return AgentChatViewResponse(
+        agent_chat_id=chat.id,
+        status=chat.status,
+        end_reason=chat.end_reason,
+        turns=len(out_msgs),
+        messages=out_msgs,
+    )
 
 
 @router.post("/{summary_id}/decision", response_model=SummaryResponse)

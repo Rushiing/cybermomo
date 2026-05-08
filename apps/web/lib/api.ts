@@ -187,3 +187,22 @@ export interface CalloutResponse {
   model: string
   created_at: string
 }
+
+export interface AgentChatMessageView {
+  id: number
+  speaker: "host" | "peer"
+  turn: number
+  topic_ref: string
+  intent: string
+  utterance: string
+  public_signals: Record<string, any>
+  own_private_signals?: Record<string, any> | null
+}
+
+export interface AgentChatViewResponse {
+  agent_chat_id: number
+  status: string
+  end_reason?: string | null
+  turns: number
+  messages: AgentChatMessageView[]
+}
