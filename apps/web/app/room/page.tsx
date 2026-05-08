@@ -90,7 +90,12 @@ export default function RoomPage() {
         }
       }
       if (decision === "drop") setNotice("已丢。这个人以后不会再被推给你。")
-      if (decision === "re_dispatch") setNotice("已请求再派一次(MVP 阶段先记着,后续会真的换话题再跑一场)。")
+      if (decision === "re_dispatch") {
+        setNotice("收到 — 我去换个话题再跟 TA 聊一场,大概一分钟回来跟你交底。")
+        // 后台 BackgroundTask 还在跑,稍后刷新拿新简报
+        setTimeout(() => { void loadAll() }, 30_000)
+        setTimeout(() => { void loadAll() }, 75_000)
+      }
       if (decision === "chat_with_my_agent") setNotice("'跟我 Agent 聊聊' 入口稍后接(对应右下悬浮 — 全局 Agent 对话)。")
       await loadAll()
     } catch (e: any) {
@@ -233,6 +238,9 @@ export default function RoomPage() {
                     已决策:{decisionLabel(s.user_decision!)}
                     {s.user_decision === "open_human_chat" && !activeSessions.some(as => as.match_id) && (
                       <span> · 等对方也决定中…</span>
+                    )}
+                    {s.user_decision === "re_dispatch" && (
+                      <span> · Agent 在换话题再聊,稍后会有新简报</span>
                     )}
                   </div>
                 )}
