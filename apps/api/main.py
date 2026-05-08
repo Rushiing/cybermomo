@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.admin.router import router as admin_router
 from src.auth.router import router as auth_router
 from src.human_chat.router import router as chat_router
 from src.match.router import router as match_router
@@ -23,12 +24,30 @@ from src.shared.settings import get_settings
 from src.summary.router import router as summary_router
 
 
+def _init_sentry() -> None:
+    settings = get_settings()
+    if not settings.sentry_dsn:
+        print("[startup] Sentry 未启用(SENTRY_DSN 未配置)")
+        return
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.env,
+            traces_sample_rate=0.05 if not settings.is_dev else 1.0,
+            send_default_pii=False,  # 不上报用户邮箱等敏感字段
+        )
+        print(f"[startup] Sentry 启用 · env={settings.env}")
+    except Exception as e:
+        print(f"[startup] Sentry init 失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"[startup] CyberMOMO API · env={settings.env}")
     print(f"[startup] CORS origins: {settings.cors_origins_list}")
-    # TODO Phase 0 完成后:DB 连通性自检 / Sentry init / Redis(future)
+    _init_sentry()
     yield
     print("[shutdown] CyberMOMO API")
 
@@ -62,13 +81,7 @@ app.include_router(match_router, prefix="/api/match", tags=["match"])
 app.include_router(summary_router, prefix="/api/summary", tags=["summary"])
 app.include_router(room_router, prefix="/api/room", tags=["room"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
-# app.include_router(match_router, prefix="/api/match", tags=["match"])
-# from src.room.router import router as room_router
-# app.include_router(room_router, prefix="/api/room", tags=["room"])
-# from src.summary.router import router as summary_router
-# app.include_router(summary_router, prefix="/api/summary", tags=["summary"])
-# from src.human_chat.router import router as chat_router
-# app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 
 
 # ========================================

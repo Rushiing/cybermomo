@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # Sentry
     sentry_dsn: str = Field(default="")
 
+    # Admin(外部 cron 调用 sweep endpoint 时用)
+    admin_secret: str = Field(default="")
+
     # 环境
     env: str = Field(default="dev")  # dev / staging / prod
 

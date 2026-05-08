@@ -23,3 +23,6 @@ anthropic==0.40.0
 # 工具
 python-multipart==0.0.19
 python-dotenv==1.0.1
+
+# 错误监控(可选;SENTRY_DSN 没配置时不启用)
+sentry-sdk[fastapi]==2.19.0
