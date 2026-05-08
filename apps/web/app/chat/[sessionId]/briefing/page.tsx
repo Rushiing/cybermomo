@@ -6,6 +6,7 @@
  * 用户决策开聊后必经的页面。
  * GET /api/chat/sessions/{id}/briefing
  */
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
@@ -99,18 +100,21 @@ export default function BriefingPage({ params }: { params: { sessionId: string }
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-bg border-t border-line-soft px-8 py-4">
+      <footer className="fixed bottom-0 left-0 right-0 bg-bg border-t border-line-soft px-8 py-4 z-40">
         <div className="max-w-[640px] mx-auto flex items-center justify-between gap-4">
           <button onClick={() => router.back()} className="border-[1.5px] border-line text-ink px-7 py-3 rounded-full hover:border-ink-secondary transition font-medium text-sm">
             再想想
           </button>
-          <button
-            onClick={() => router.push(`/chat/${sessionId}`)}
-            disabled={!data}
-            className="bg-primary text-white px-7 py-3 rounded-full font-medium hover:bg-primary-dark disabled:opacity-40 transition"
+          {/* 用 Link 而非 onClick(更稳;router.push 在某些情况会卡住)*/}
+          <Link
+            href={`/chat/${sessionId}`}
+            className={`bg-primary text-white px-7 py-3 rounded-full font-medium transition ${
+              !data ? "opacity-40 pointer-events-none" : "hover:bg-primary-dark"
+            }`}
+            onClick={() => console.log("[briefing] navigating to /chat/" + sessionId)}
           >
             好,去聊吧 →
-          </button>
+          </Link>
         </div>
       </footer>
     </div>

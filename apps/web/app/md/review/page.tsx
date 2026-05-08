@@ -145,12 +145,12 @@ export default function ReviewPage() {
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-bg border-t border-line-soft px-8 py-3.5">
+      <footer className="fixed bottom-0 left-0 right-0 bg-bg border-t border-line-soft px-8 py-3.5 z-40">
         <div className="max-w-[760px] mx-auto flex items-center justify-between">
           <span className="text-xs text-ink-secondary">读完了之后,你的 Agent 就开始替你认识人了。</span>
-          <button onClick={() => router.push("/room")} className="bg-primary text-white px-7 py-3 rounded-full font-medium hover:bg-primary-dark transition">
+          <Link href="/room" className="bg-primary text-white px-7 py-3 rounded-full font-medium hover:bg-primary-dark transition">
             进个人房间 →
-          </button>
+          </Link>
         </div>
       </footer>
     </div>
