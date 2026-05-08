@@ -41,9 +41,10 @@ export default function QuizPage() {
   }
 
   // ---- 答题 ----
-  function pickOption(idx: number) {
-    const q = Q[idx]
-    setAnswers(prev => ({ ...prev, [q.id]: idx }))
+  function pickOption(optIdx: number) {
+    // 注:外层 idx 是当前题号(state),这里取当前题的 id 作 key
+    const qid = Q[idx].id
+    setAnswers(prev => ({ ...prev, [qid]: optIdx }))
   }
 
   function next() {
