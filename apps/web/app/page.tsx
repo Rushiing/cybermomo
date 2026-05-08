@@ -38,15 +38,14 @@ export default function HomePage() {
 
       {/* Dev skip — Phase 1 OAuth 接入后删除 */}
       <div className="mt-6 text-center">
-        <p className="text-xs text-ink-tertiary mb-3">开发模式 · OAuth 还没接</p>
-        <div className="flex gap-2">
-          <a href="/md/quiz" className="text-sm text-primary underline-offset-4 hover:underline">
-            做问卷 →
-          </a>
-          <span className="text-ink-tertiary">·</span>
-          <a href="/room" className="text-sm text-primary underline-offset-4 hover:underline">
-            个人房间 →
-          </a>
+        <p className="text-xs text-ink-tertiary mb-3">开发模式 · OAuth 还没接,直接走流程</p>
+        <a href="/onboarding" className="inline-block text-sm text-primary font-medium border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition">
+          继续(从 Onboarding 开始)→
+        </a>
+        <div className="mt-3 flex justify-center gap-3 text-xs text-ink-tertiary">
+          <a href="/md/quiz" className="hover:text-ink">直接答题</a>
+          <span>·</span>
+          <a href="/room" className="hover:text-ink">直接进个人房间</a>
         </div>
       </div>
 
