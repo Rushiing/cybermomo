@@ -11,6 +11,7 @@
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 
+import Toast from "@/components/Toast"
 import {
   api,
   type CalloutResponse,
@@ -35,6 +36,9 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
   const [calloutPending, setCalloutPending] = useState(false)
 
   const [menuOpen, setMenuOpen] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  // 拉黑 / 举报 二次确认:点过一次的 action 在这里
+  const [pendingExit, setPendingExit] = useState<"block" | "report" | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -56,7 +60,7 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
       setCallouts(cs)
       scrollToBottom()
     } catch (e: any) {
-      alert(`加载失败:${e?.detail || e?.message}`)
+      setNotice(`加载失败:${e?.detail || e?.message}`)
     }
   }
 
@@ -88,7 +92,7 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
       setDraft("")
       scrollToBottom()
     } catch (e: any) {
-      alert(`发送失败:${e?.detail || e?.message}`)
+      setNotice(`发送失败:${e?.detail || e?.message}`)
     } finally {
       setSending(false)
     }
@@ -104,20 +108,30 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
       setCallouts([...callouts, c])
       setCalloutDraft("")
     } catch (e: any) {
-      alert(`callout 失败:${e?.detail || e?.message}`)
+      setNotice(`callout 失败:${e?.detail || e?.message}`)
     } finally {
       setCalloutPending(false)
     }
   }
 
   async function exit(action: "quit" | "block" | "report") {
-    const confirmed = action === "quit" || confirm(action === "block" ? "确认拉黑对方?" : "确认举报?")
-    if (!confirmed) return
+    // quit 不弹确认;block/report 走二次确认模态
+    if (action !== "quit") {
+      setMenuOpen(false)
+      setPendingExit(action)
+      return
+    }
+    await _doExit("quit")
+  }
+
+  async function _doExit(action: "quit" | "block" | "report") {
     try {
       await api.post(`/api/chat/sessions/${sessionId}/exit`, { action })
+      setPendingExit(null)
       router.push("/room")
     } catch (e: any) {
-      alert(`退出失败:${e?.detail || e?.message}`)
+      setPendingExit(null)
+      setNotice(`退出失败:${e?.detail || e?.message}`)
     }
   }
 
@@ -126,6 +140,39 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
 
   return (
     <div className="h-screen flex flex-col bg-bg">
+      <Toast message={notice} onClose={() => setNotice(null)} />
+
+      {/* 拉黑 / 举报 二次确认 */}
+      {pendingExit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setPendingExit(null)} />
+          <div className="relative bg-bg rounded-lg shadow-modal max-w-sm w-full p-6">
+            <h3 className="text-base font-semibold mb-2">
+              {pendingExit === "block" ? "确认拉黑对方?" : "确认举报对方?"}
+            </h3>
+            <p className="text-sm text-ink-secondary leading-relaxed mb-5">
+              {pendingExit === "block"
+                ? "拉黑后这位以后不会再被推给你,聊天也会立即结束。"
+                : "举报会保留这场聊天作为证据,平台会跟进。同时会自动加软拉黑。"}
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setPendingExit(null)}
+                className="border-[1.5px] border-line text-ink-secondary px-4 py-2 rounded-md text-sm hover:border-ink-secondary transition"
+              >
+                再想想
+              </button>
+              <button
+                onClick={() => _doExit(pendingExit)}
+                className="bg-warn text-bg px-4 py-2 rounded-md text-sm font-medium hover:opacity-90 transition"
+              >
+                {pendingExit === "block" ? "确认拉黑" : "确认举报"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 顶部 */}
       <header className="bg-bg border-b border-line-soft px-6 flex items-center gap-4 h-[60px] flex-shrink-0 relative">
         <button onClick={() => router.push("/room")} className="w-9 h-9 rounded-md hover:bg-bg-soft flex items-center justify-center">

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agent_chat.models import AgentChat
 from src.auth.deps import CurrentUser
 from src.auth.models import User, UserProfile
-from src.match.models import Match
+from src.match.models import Match, MatchHook
 from src.room.models import UserSoftBlocklist
 from src.shared.db import get_session
 from src.summary.models import Summary, SummaryDecision
@@ -106,13 +106,70 @@ async def get_room_status(
     )
     pending = (await db.execute(pending_q)).scalars().all()
 
-    # top hint 留空 — Phase 5 加
+    # top_hint:从有戏的简报里挑最近一张,拉对方 nickname + 第一条 highlight 关键词
+    top_hint = await _build_top_hint(db, host_user_id=current_user.id, spark_summaries=spark)
+
     return RoomStatusFullResponse(
         chatting_count=len(chatting),
         spark_count=len(spark),
         total_summaries_pending=len(pending),
-        top_hint=None,
+        top_hint=top_hint,
     )
+
+
+async def _build_top_hint(
+    db: AsyncSession,
+    *,
+    host_user_id: int,
+    spark_summaries: list[Summary],
+) -> Optional[TopHint]:
+    """
+    从「有戏」简报里挑最新一张,拉对方 nickname + 一句话钩子。
+    没有有戏的就返回 None(状态栏退化成"Agent 正在聊 N 个 · 0 个有戏")。
+    """
+    if not spark_summaries:
+        return None
+    # 取最新一张
+    sm = max(spark_summaries, key=lambda s: s.created_at)
+    if sm.agent_chat_id is None:
+        return None
+
+    # 找对方 user_id
+    chat = (await db.execute(
+        select(AgentChat).where(AgentChat.id == sm.agent_chat_id)
+    )).scalar_one_or_none()
+    if chat is None:
+        return None
+    match = (await db.execute(
+        select(Match).where(Match.id == chat.match_id)
+    )).scalar_one_or_none()
+    if match is None:
+        return None
+    peer_id = match.user_b_id if match.user_a_id == host_user_id else match.user_a_id
+
+    # 对方 nickname
+    peer_profile = (await db.execute(
+        select(UserProfile).where(UserProfile.user_id == peer_id)
+    )).scalar_one_or_none()
+    nickname = peer_profile.nickname if peer_profile else f"user_{peer_id}"
+
+    # 钩子:取这次匹配里给宿主看的第一条 hook,fallback 用 summary 第一条 highlight
+    topic: Optional[str] = None
+    hook = (await db.execute(
+        select(MatchHook)
+        .where(MatchHook.match_id == match.id, MatchHook.target_user_id == host_user_id)
+        .order_by(MatchHook.id)
+        .limit(1)
+    )).scalar_one_or_none()
+    if hook and hook.hook_text:
+        topic = hook.hook_text
+    elif sm.highlights:
+        first = sm.highlights[0]
+        if isinstance(first, dict) and first.get("text"):
+            # 取前 40 字,避免状态栏被一句完整 highlight 塞满
+            topic = first["text"][:40]
+
+    return TopHint(nickname=nickname, topic=topic)
 
 
 # ========================================

@@ -156,11 +156,21 @@ export default function RoomPage() {
             <span className="block w-2.5 h-2.5 rounded-full bg-primary" />
             <span className="absolute inset-[-4px] rounded-full border-2 border-primary opacity-40 animate-agent-pulse" />
           </div>
-          <div className="text-sm text-ink-secondary">
+          <div className="text-sm text-ink-secondary flex-1">
             {status ? (
               <>
-                <span className="text-ink font-medium">Agent 正在聊 {status.chatting_count} 个</span>
-                <span> · 其中 {status.spark_count} 个有戏 · 待决策 {status.total_summaries_pending}</span>
+                <div>
+                  <span className="text-ink font-medium">Agent 正在聊 {status.chatting_count} 个</span>
+                  <span> · 其中 {status.spark_count} 个有戏 · 待决策 {status.total_summaries_pending}</span>
+                </div>
+                {status.top_hint?.nickname && (
+                  <div className="text-xs text-ink-tertiary mt-1 line-clamp-1">
+                    其中 <strong className="text-ink-secondary font-medium">@{status.top_hint.nickname}</strong>
+                    {status.top_hint.topic && (
+                      <> — {status.top_hint.topic}</>
+                    )}
+                  </div>
+                )}
               </>
             ) : "加载中…"}
           </div>

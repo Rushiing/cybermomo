@@ -14,6 +14,7 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 
+import Toast from "@/components/Toast"
 import Topbar from "@/components/Topbar"
 import {
   api,
@@ -47,6 +48,9 @@ export default function MePage() {
   const [blocklist, setBlocklist] = useState<SoftBlockEntry[]>([])
   const [agentChats, setAgentChats] = useState<AgentChatHistoryItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [notice, setNotice] = useState<string | null>(null)
+  // 软拉黑解除二次确认:点过一次的 uid 在这里,再点一下才真执行
+  const [armedUnblockUid, setArmedUnblockUid] = useState<number | null>(null)
 
   useEffect(() => { void load() }, [])
 
@@ -67,18 +71,30 @@ export default function MePage() {
   }
 
   async function unblock(uid: number) {
-    if (!confirm(`解除对 user_${uid} 的软拉黑?`)) return
+    // 点第一次:armed,文案变 → 给用户 5s 反悔窗口
+    if (armedUnblockUid !== uid) {
+      setArmedUnblockUid(uid)
+      setTimeout(() => {
+        setArmedUnblockUid(prev => (prev === uid ? null : prev))
+      }, 5000)
+      return
+    }
+    // 点第二次:真执行
+    setArmedUnblockUid(null)
     try {
       await api.del(`/api/room/blocklist/${uid}`)
+      setNotice(`已解除对 user_${uid} 的软拉黑。`)
       await load()
     } catch (e: any) {
-      alert(`解除失败:${e?.detail || e?.message}`)
+      setNotice(`解除失败:${e?.detail || e?.message}`)
     }
   }
 
   return (
     <div className="min-h-screen">
       <Topbar active="me" />
+
+      <Toast message={notice} onClose={() => setNotice(null)} />
 
       <main className="max-w-[640px] mx-auto px-6 py-8 pb-24">
         {loading && <p className="text-center py-12 text-ink-secondary">加载中…</p>}
@@ -224,9 +240,13 @@ export default function MePage() {
                         </div>
                         <button
                           onClick={() => unblock(b.blocked_user_id)}
-                          className="text-xs text-ink-secondary hover:text-warn px-3 py-1.5 border border-line-soft rounded-md hover:border-warn transition"
+                          className={`text-xs px-3 py-1.5 border rounded-md transition ${
+                            armedUnblockUid === b.blocked_user_id
+                              ? "border-warn text-warn bg-warn-soft font-medium"
+                              : "border-line-soft text-ink-secondary hover:border-warn hover:text-warn"
+                          }`}
                         >
-                          解除
+                          {armedUnblockUid === b.blocked_user_id ? "确定解除?" : "解除"}
                         </button>
                       </div>
                     ))}
