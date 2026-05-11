@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.admin.router import router as admin_router
 from src.agent_chat.router import router as agent_chat_router
+from src.agent_self.router import router as agent_self_router
 from src.auth.router import router as auth_router
 from src.human_chat.router import router as chat_router
 from src.match.router import router as match_router
@@ -81,6 +82,7 @@ app.include_router(md_router, prefix="/api/md", tags=["md"])
 app.include_router(match_router, prefix="/api/match", tags=["match"])
 app.include_router(summary_router, prefix="/api/summary", tags=["summary"])
 app.include_router(agent_chat_router, prefix="/api/agent_chat", tags=["agent_chat"])
+app.include_router(agent_self_router, prefix="/api/me/agent", tags=["agent_self"])
 app.include_router(room_router, prefix="/api/room", tags=["room"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
