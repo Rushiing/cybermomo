@@ -243,6 +243,13 @@ export default function MePage() {
             <Section title="设置 / 帐号">
               <Card>
                 <div className="space-y-2 text-sm">
+                  <Link
+                    href="/changelog"
+                    className="flex items-center justify-between gap-3 py-2 -mx-1 px-1 rounded hover:bg-bg-soft transition group"
+                  >
+                    <span>更新日志</span>
+                    <span className="text-xs text-ink-tertiary group-hover:text-ink-secondary">看 →</span>
+                  </Link>
                   <DisabledRow label="通知设置" hint="MVP 阶段不主动推,后续接入" />
                   <DisabledRow label="重读 Onboarding" hint="后续接入" />
                   <DisabledRow label="退出登录" hint="OAuth 接入后启用" />
