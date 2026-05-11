@@ -244,6 +244,13 @@ export default function MePage() {
               <Card>
                 <div className="space-y-2 text-sm">
                   <Link
+                    href="/me/agent"
+                    className="flex items-center justify-between gap-3 py-2 -mx-1 px-1 rounded hover:bg-bg-soft transition group"
+                  >
+                    <span>跟我的 Agent 聊过什么</span>
+                    <span className="text-xs text-ink-tertiary group-hover:text-ink-secondary">看 →</span>
+                  </Link>
+                  <Link
                     href="/changelog"
                     className="flex items-center justify-between gap-3 py-2 -mx-1 px-1 rounded hover:bg-bg-soft transition group"
                   >

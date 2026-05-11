@@ -28,6 +28,29 @@ export interface ReleaseEntry {
 
 export const RELEASE_NOTES: ReleaseEntry[] = [
   {
+    version: "2026-05-11b",
+    date: "2026-05-11",
+    title: "你可以直接跟自己 Agent 对话了",
+    sections: [
+      {
+        category: "新功能",
+        bullets: [
+          "右下角浮动 Agent — 全站都能点开,跟你的 Agent 直接聊。它知道你的 .md 人格,记得过去那些简报,能基于这些跟你讨论。",
+          "「跟我 Agent 聊聊」真的能聊了 — 简报上点这个决策,直接进入对话页,Agent 会引用那张简报起头。",
+          "Agent 主动回访 — 真人聊天结束后(或被对方拉黑、24h 没动静),Agent 会主动起一段对话:「跟你简单同步下,刚那场怎么样?」 在「我」→「跟我的 Agent 聊过什么」里能找到。",
+          "「我」→ 设置里新增「跟我的 Agent 聊过什么」入口,所有跟 Agent 的会话历史在一起看。",
+        ],
+      },
+      {
+        category: "看不见但发生了什么",
+        bullets: [
+          "Agent 能从你过去的简报里检索相关记忆 — 你问它「user_3 跟我合适吗」,它会从那场互聊和简报里调出来跟你聊。",
+          "Agent 跟你说话的风格是「朋友式八卦」,不是客服 — 它可以有理有据反驳你的决定,但最终方向你定。",
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-05-11",
     date: "2026-05-11",
     title: "Agent 互聊更顺滑 · 聊过的人都看得到",

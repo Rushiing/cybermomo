@@ -63,6 +63,103 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T
 }
 
+/**
+ * SSE 流式调用 helper(给 /api/me/agent/conversations/{id}/messages 用)
+ *
+ * 服务端格式:
+ *   event: token
+ *   data: <增量>
+ *
+ *   event: done
+ *   data: {"conversation_id": N}
+ *
+ *   event: error
+ *   data: <错误信息>
+ *
+ * 用法:
+ *   await streamSSE("/api/me/agent/...", { content: "..." }, {
+ *     onToken: tok => setText(t => t + tok),
+ *     onDone:  () => setStreaming(false),
+ *     onError: msg => setError(msg),
+ *     signal:  abortController.signal,
+ *   })
+ */
+export interface StreamSSEHandlers {
+  onToken: (token: string) => void
+  onDone?: (data: string) => void
+  onError?: (message: string) => void
+  signal?: AbortSignal
+}
+
+export async function streamSSE(
+  path: string,
+  body: unknown,
+  handlers: StreamSSEHandlers,
+): Promise<void> {
+  const url = `${BASE}${path}`
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...getAuthHeader(),
+    },
+    body: JSON.stringify(body),
+    signal: handlers.signal,
+  })
+  if (!resp.ok || !resp.body) {
+    const text = await resp.text().catch(() => "")
+    const detail = text || resp.statusText
+    throw new ApiError(resp.status, detail)
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder("utf-8")
+  let buf = ""
+  // 单个 event 的累积字段
+  let currentEvent: string | null = null
+  let currentData: string[] = []
+
+  function flushEvent() {
+    if (currentEvent === null && currentData.length === 0) return
+    const data = currentData.join("\n")
+    if (currentEvent === "token") handlers.onToken(data)
+    else if (currentEvent === "done") handlers.onDone?.(data)
+    else if (currentEvent === "error") handlers.onError?.(data)
+    currentEvent = null
+    currentData = []
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+
+    // 按行处理(SSE event 以空行分隔)
+    let nlIdx: number
+    while ((nlIdx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nlIdx).replace(/\r$/, "")
+      buf = buf.slice(nlIdx + 1)
+      if (line === "") {
+        // 空行 = event 边界
+        flushEvent()
+      } else if (line.startsWith("event:")) {
+        currentEvent = line.slice(6).trim()
+      } else if (line.startsWith("data:")) {
+        currentData.push(line.slice(5).replace(/^\s/, ""))
+      }
+      // 其它(comment / id 等)忽略
+    }
+  }
+  // tail
+  if (buf.length > 0) {
+    // 流尾如果还有残留 data 行,按一个 event 收尾
+    if (currentEvent !== null || currentData.length > 0) flushEvent()
+  } else {
+    flushEvent()
+  }
+}
+
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T, B = unknown>(path: string, body?: B) => request<T>("POST", path, body),
@@ -131,6 +228,8 @@ export interface SummaryResponse {
   created_at: string
   user_decision?: string | null
   decided_at?: string | null
+  // 仅决策 chat_with_my_agent 的响应里出现 — 用于跳转 /me/agent/{id}
+  agent_conversation_id?: number | null
 }
 
 export interface RoomStatusResponse {
@@ -207,3 +306,36 @@ export interface AgentChatViewResponse {
   turns: number
   messages: AgentChatMessageView[]
 }
+
+// ========================================
+// 跟自己 Agent 对话(§4.10)
+// ========================================
+
+export type AgentConversationScope = "room" | "plaza" | "revisit" | "general"
+
+export interface AgentConversation {
+  id: number
+  host_user_id: number
+  scope: AgentConversationScope
+  title?: string | null
+  context_refs?: Record<string, any> | null
+  last_message_at?: string | null
+  created_at: string
+  last_message_preview?: string | null
+}
+
+export interface AgentConversationMessage {
+  id: number
+  conversation_id: number
+  role: "user" | "assistant" | "system"
+  content: string
+  turn: number
+  created_at: string
+}
+
+export interface CreateAgentConversationRequest {
+  scope?: AgentConversationScope
+  title?: string | null
+  context_refs?: Record<string, any> | null
+}
+

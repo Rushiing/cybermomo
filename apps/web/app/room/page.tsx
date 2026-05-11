@@ -74,7 +74,7 @@ export default function RoomPage() {
   async function decide(summaryId: number, decision: DecisionRequest["decision"]) {
     setActionPending(summaryId)
     try {
-      await api.post<SummaryResponse, DecisionRequest>(
+      const decisionResp = await api.post<SummaryResponse, DecisionRequest>(
         `/api/summary/${summaryId}/decision`,
         { decision },
       )
@@ -96,7 +96,15 @@ export default function RoomPage() {
         setTimeout(() => { void loadAll() }, 30_000)
         setTimeout(() => { void loadAll() }, 75_000)
       }
-      if (decision === "chat_with_my_agent") setNotice("'跟我 Agent 聊聊' 入口稍后接(对应右下悬浮 — 全局 Agent 对话)。")
+      if (decision === "chat_with_my_agent") {
+        // 后端已经种好 conversation 并返回了 agent_conversation_id,直接跳
+        const convId = decisionResp?.agent_conversation_id
+        if (convId) {
+          router.push(`/me/agent/${convId}`)
+          return
+        }
+        setNotice("Agent 已经准备好跟你聊 — 右下浮动按钮打开就是。")
+      }
       await loadAll()
     } catch (e: any) {
       setNotice(`决策失败:${e?.detail || e?.message}`)
