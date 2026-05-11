@@ -1,8 +1,9 @@
 """
-Admin API · 给外部 cron 调用,需要 X-Admin-Secret 头
+Admin API · 给外部 cron / 一次性 ops 调用,需要 X-Admin-Secret 头
 
-- POST /api/admin/observation-sweep   24h 沉默自动结束 + 观察报告
-- POST /api/admin/rerun-pipeline      给某 user_id 重跑完整 pipeline(debug)
+- POST /api/admin/observation-sweep        24h 沉默自动结束 + 观察报告
+- POST /api/admin/rerun-pipeline/{uid}     给某 user_id 重跑完整 pipeline(debug)
+- POST /api/admin/backfill-embeddings      回填存量 md_segments / summaries 的 embedding(幂等)
 
 Railway Cron Jobs 配置示例(observation sweep · 每小时):
    curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agent_self.backfill import backfill_all
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
 from src.match.pipeline import run_full_pipeline_for_user
@@ -121,4 +123,28 @@ async def rerun_pipeline(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"pipeline 失败: {e}",
+        )
+
+
+@router.post("/backfill-embeddings")
+async def backfill_embeddings(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    一次性回填:把 md_segments / summaries 里 embedding IS NULL 的行补上,
+    让 RAG 检索能用上存量数据。
+
+    幂等:已有 embedding 的行跳过。每行独立 commit,中途失败不丢前面进度。
+
+    注意:HTTP 同步调用 — 当前 MVP 数据量小(<100 行)能在分钟级跑完。
+    数据量上千后需要改成 BackgroundTask + 进度查询。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        result = await backfill_all(verbose=False)
+        return {"ok": True, **result}
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"backfill 失败: {e}",
         )
