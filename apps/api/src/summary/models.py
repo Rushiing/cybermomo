@@ -9,6 +9,7 @@
 
 约束:agent_chat_id 与 chat_session_id 必须有且只有一个非空(由 CHECK 约束)。
 """
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -47,6 +48,8 @@ class Summary(Base):
     risks: Mapped[list] = mapped_column(JSONB, nullable=False)
     recommended_action: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_chunks: Mapped[list] = mapped_column(JSONB, nullable=False)
+    # RAG 向量(text-embedding-v3,1024 维)— 异步回填,旧记录可能为 NULL
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
@@ -64,6 +67,12 @@ class Summary(Base):
             "idx_summaries_host",
             "host_user_id",
             "created_at",
+        ),
+        Index(
+            "idx_summaries_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
 

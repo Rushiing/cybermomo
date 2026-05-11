@@ -17,6 +17,10 @@ from src.human_chat.models import (  # noqa: F401
     ChatReport,
 )
 from src.llm.models import PromptVersion, LlmCallLog  # noqa: F401
+from src.agent_self.models import (  # noqa: F401
+    AgentConversation,
+    AgentConversationMessage,
+)
 from src.shared.base import Base  # noqa: F401
 
 __all__ = ["Base"]
