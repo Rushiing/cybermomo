@@ -23,6 +23,9 @@ class SummaryResponse(BaseModel):
     created_at: datetime
     user_decision: Optional[str] = None  # 来自 summary_decisions
     decided_at: Optional[datetime] = None
+    # 只有 POST /decision 接口在 decision='chat_with_my_agent' 时返回
+    # 用于前端跳转 /me/agent/{conv_id}
+    agent_conversation_id: Optional[int] = None
 
 
 class DecisionRequest(BaseModel):

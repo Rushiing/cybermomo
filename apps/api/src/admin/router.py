@@ -17,6 +17,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_self.backfill import backfill_all
+from src.agent_self.revisit import seed_revisit_after_silent_sweep
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
 from src.match.pipeline import run_full_pipeline_for_user
@@ -77,7 +78,7 @@ async def observation_sweep(
         session.ended_at = datetime.now(timezone.utc)
         await db.commit()
 
-        # 异步跑双方观察报告(用独立 session 避免事务冲突)
+        # 异步跑双方观察报告 + Agent 回访(每方一份)
         for host_uid in [session.user_a_id, session.user_b_id]:
             try:
                 async with SessionLocal() as bg_db:
@@ -90,6 +91,11 @@ async def observation_sweep(
                         )
             except Exception as e:
                 print(f"[sweep] observation failed session={session.id} host={host_uid}: {e}")
+            # Agent 回访(seed 函数自带独立 SessionLocal)
+            try:
+                await seed_revisit_after_silent_sweep(session.id, host_uid)
+            except Exception as e:
+                print(f"[sweep] revisit failed session={session.id} host={host_uid}: {e}")
 
         swept.append({
             "session_id": session.id,

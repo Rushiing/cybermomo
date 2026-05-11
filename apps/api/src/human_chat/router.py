@@ -340,6 +340,14 @@ async def _trigger_observation_async(session_id: int, host_user_id: int) -> None
             print(f"[observation] failed session={session_id} host={host_user_id}: {e}")
 
 
+async def _trigger_agent_revisit_async(
+    session_id: int, host_user_id: int, exit_action: str
+) -> None:
+    """BackgroundTask:种 Agent 回访 conversation"""
+    from src.agent_self.revisit import seed_revisit_after_chat_exit
+    await seed_revisit_after_chat_exit(session_id, host_user_id, exit_action)
+
+
 @router.post("/sessions/{session_id}/exit", response_model=ChatSessionResponse)
 async def exit_session(
     session_id: int,
@@ -416,8 +424,11 @@ async def exit_session(
     await db.commit()
     await db.refresh(session)
 
-    # 异步给双方各跑一份观察报告
-    background_tasks.add_task(_trigger_observation_async, session.id, session.user_a_id)
-    background_tasks.add_task(_trigger_observation_async, session.id, session.user_b_id)
+    # 异步给双方各跑一份观察报告 + Agent 主动回访
+    for host_uid in [session.user_a_id, session.user_b_id]:
+        background_tasks.add_task(_trigger_observation_async, session.id, host_uid)
+        background_tasks.add_task(
+            _trigger_agent_revisit_async, session.id, host_uid, payload.action
+        )
 
     return session

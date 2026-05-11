@@ -285,4 +285,16 @@ async def make_decision(
             requester_user_id=current_user.id,
         )
 
-    return _to_response(s, decision)
+    # chat_with_my_agent:同步种一个 conversation,前端拿到 id 直接跳
+    conv_id: Optional[int] = None
+    if payload.decision == "chat_with_my_agent":
+        from src.agent_self.revisit import seed_room_decision_conversation
+
+        conv_id = await seed_room_decision_conversation(
+            db, host_user_id=current_user.id, summary_id=s.id
+        )
+
+    resp = _to_response(s, decision)
+    if conv_id is not None:
+        resp.agent_conversation_id = conv_id
+    return resp
