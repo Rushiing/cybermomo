@@ -15,7 +15,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.llm.types import ChatResponse, LLMRole, Message
+from src.llm.types import ChatResponse, EmbeddingResponse, LLMRole, Message
 from src.llm.models import LlmCallLog
 from src.shared.settings import get_settings
 
@@ -30,15 +30,18 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 def _model_for_role(role: LLMRole) -> str:
     """
     role → model 路由。
-    测试期所有 role 走 settings.llm_model(默认 deepseek-v4-flash)。
+    测试期 chat 类 role 走 settings.llm_model(默认 deepseek-v4-flash),
+    embedding 走 dashscope text-embedding-v3(1024 维)。
     后续要按 role 切模型,在这里加分支。
     """
     settings = get_settings()
     if role == "embedding":
-        # 测试期暂不用 embedding(matching 走纯 compute)
-        # 真要用走 dashscope text-embedding-v3
         return "text-embedding-v3"
     return settings.llm_model
+
+
+# text-embedding-v3 输出维度,与 md_documents.embedding / summaries.embedding 列对齐
+EMBEDDING_DIM = 1024
 
 
 # ========================================
@@ -142,5 +145,84 @@ async def llm_chat(
         provider="dashscope",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        latency_ms=latency_ms,
+    )
+
+
+# ========================================
+# Embedding 调用入口
+# ========================================
+
+# DashScope text-embedding-v3 单次最大输入(safe 估计;真实限制为 2048 tokens / 字符)
+_EMBED_MAX_CHARS = 6000
+
+
+async def llm_embed(
+    text: str,
+    *,
+    db: Optional[AsyncSession] = None,
+    user_id: Optional[int] = None,
+    related_table: Optional[str] = None,
+    related_id: Optional[int] = None,
+) -> EmbeddingResponse:
+    """
+    异步生成单条文本的 embedding(text-embedding-v3,1024 维)。
+
+    用法:
+        resp = await llm_embed("某段宿主 .md 切片", db=db, user_id=u.id,
+                                related_table="md_documents", related_id=md.id)
+        vec: list[float] = resp.vector  # len(vec) == EMBEDDING_DIM == 1024
+
+    长文本由调用方自行 chunk(超过 _EMBED_MAX_CHARS 会先截断,避免 API 报错)。
+    传入 `db` 时会写 llm_call_log(role='embedding')。
+    """
+    model = _model_for_role("embedding")
+    client = _get_client()
+
+    payload = (text or "")[:_EMBED_MAX_CHARS]
+    if not payload.strip():
+        raise ValueError("llm_embed: empty text")
+
+    started = time.monotonic()
+    error: Optional[str] = None
+    vector: list[float] = []
+    input_tokens: Optional[int] = None
+
+    try:
+        resp = await client.embeddings.create(model=model, input=payload)
+        if resp.data:
+            vector = list(resp.data[0].embedding)
+        if resp.usage:
+            input_tokens = resp.usage.prompt_tokens
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if db is not None:
+            try:
+                log = LlmCallLog(
+                    user_id=user_id,
+                    role="embedding",
+                    provider="dashscope",
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=None,
+                    latency_ms=latency_ms,
+                    error=error,
+                    related_table=related_table,
+                    related_id=related_id,
+                )
+                db.add(log)
+                await db.commit()
+            except Exception as log_err:
+                print(f"[llm gateway] embed log write failed: {log_err}")
+
+    return EmbeddingResponse(
+        vector=vector,
+        dim=len(vector),
+        model=model,
+        provider="dashscope",
+        input_tokens=input_tokens,
         latency_ms=latency_ms,
     )

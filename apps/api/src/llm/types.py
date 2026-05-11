@@ -34,3 +34,13 @@ class ChatResponse(BaseModel):
     latency_ms: int | None = None
     cost_estimate: float | None = None
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
+
+
+class EmbeddingResponse(BaseModel):
+    """LLM embedding 调用产物 — 单条文本"""
+    vector: list[float]
+    dim: int
+    model: str
+    provider: str
+    input_tokens: int | None = None
+    latency_ms: int | None = None
