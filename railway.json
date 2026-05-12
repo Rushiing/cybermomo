@@ -5,7 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "preDeployCommand": "alembic upgrade head",
+    "// note": "alembic upgrade head 已经在 Dockerfile CMD 里;这里不再重复设 preDeployCommand,",
+    "// note2": "否则 cron service(共用仓库 + railway.json)也会跑 alembic,而它没配 DATABASE_URL → 崩",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
