@@ -8,7 +8,7 @@ Auth 依赖注入
 from typing import Annotated, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,6 +86,15 @@ async def get_current_user(
         db.add(profile)
         await db.commit()
         await db.refresh(user)
+        # 显式指定 id 不自增 sequence,这里手动把它撸到 MAX(id),
+        # 避免后续 OAuth 真用户(走 sequence 取 id)撞 pk_users。
+        await db.execute(text(
+            "SELECT setval("
+            "pg_get_serial_sequence('users', 'id'), "
+            "GREATEST(COALESCE((SELECT MAX(id) FROM users), 0), 1), true"
+            ")"
+        ))
+        await db.commit()
     except IntegrityError:
         await db.rollback()
         user = (await db.execute(
