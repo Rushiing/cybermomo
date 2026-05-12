@@ -29,7 +29,7 @@ from src.agent_self.engine import (
 from src.agent_self.models import AgentConversation, AgentConversationMessage
 from src.auth.deps import CurrentUser
 from src.auth.models import User
-from src.shared.db import get_session
+from src.shared.db import SessionLocal, get_session
 
 router = APIRouter()
 
@@ -246,6 +246,7 @@ async def send_message(
 
     前端用 EventSource 或 fetch+ReadableStream 解码即可。
     """
+    # 用注入的 db 做一次性 host scope 校验(快,在 streaming 之前)
     conv = (
         await db.execute(
             select(AgentConversation).where(AgentConversation.id == conv_id)
@@ -254,16 +255,37 @@ async def send_message(
     if conv is None or conv.host_user_id != current_user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="会话不存在或不属于你")
 
+    # 注:不能复用上面的 db。FastAPI Depends 注入的 session 在路由函数 return
+    # (即 StreamingResponse 创建)那一刻就 close 了,后续 generator 异步
+    # 跑到 await db.execute() 会拿到 closed session。生成器内部起独立 SessionLocal。
+    captured_conv_id = conv_id
+    captured_user_message = payload.content
+
     async def event_stream():
         try:
-            async for token in stream_and_persist(
-                db,
-                conversation=conv,
-                user_message_content=payload.content,
-            ):
-                yield _sse_event(token, event="token")
-            yield _sse_event(f'{{"conversation_id": {conv.id}}}', event="done")
+            async with SessionLocal() as bg_db:
+                fresh_conv = (
+                    await bg_db.execute(
+                        select(AgentConversation).where(
+                            AgentConversation.id == captured_conv_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if fresh_conv is None:
+                    yield _sse_event("会话不存在", event="error")
+                    return
+
+                async for token in stream_and_persist(
+                    bg_db,
+                    conversation=fresh_conv,
+                    user_message_content=captured_user_message,
+                ):
+                    yield _sse_event(token, event="token")
+                yield _sse_event(
+                    f'{{"conversation_id": {captured_conv_id}}}', event="done"
+                )
         except Exception as e:
+            print(f"[agent_self] stream failed conv={captured_conv_id}: {e}")
             yield _sse_event(f"{type(e).__name__}: {e}", event="error")
 
     return StreamingResponse(
