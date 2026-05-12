@@ -24,9 +24,14 @@ def _make_engine() -> AsyncEngine:
     return create_async_engine(
         settings.database_url,
         echo=settings.is_dev,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        # 连接池调大:SSE 流式 endpoint + BackgroundTask LLM 都会长时间持有连接,
+        # pool_size=5 时一个浮动 Agent 抽屉就能把池子打满。
+        pool_size=20,
+        max_overflow=20,
+        # pool_recycle 强制每 30 分钟回收一次,防止 Railway PG 被 NAT 断开
+        pool_recycle=1800,
+        # 借连接超时:30s 内拿不到就抛,优于 hang 等 → 暴露问题
+        pool_timeout=30,
     )
 
 

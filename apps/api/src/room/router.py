@@ -64,26 +64,56 @@ async def get_room_status(
     """
     返回 chatting / spark / pending 计数 + top_hint。
 
-    性能:之前 7 条串行 SQL(SELECT 全部 row 后 len() + 4 个 top_hint join)。
-    优化:
-      - 计数用 COUNT() 不 fetch row
-      - 3 个独立 COUNT 用独立 sessions 并发跑
-      - top_hint 一条 JOIN 查 → 总共 3-4 个 round-trip,且大部分并行
+    性能:全部在**注入的 db 上**串行跑(同一连接),避免一次请求抢多个连接打爆 pool。
+    - 3 个 COUNT()(不 fetch 数据)
+    - top_hint 用一条 JOIN 拿 summary + match + peer_id,再补 nickname / hook
     """
     uid = current_user.id
 
-    # 三个 COUNT + 一个 top_hint detail,全部并发
-    (
-        chatting_count,
-        spark_count,
-        pending_count,
-        top_hint,
-    ) = await asyncio.gather(
-        _count_chatting(uid),
-        _count_spark(uid),
-        _count_pending(uid),
-        _build_top_hint_single_query(uid),
-    )
+    chatting_count = await db.scalar(
+        select(func.count())
+        .select_from(AgentChat)
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(
+            AgentChat.status == "running",
+            or_(Match.user_a_id == uid, Match.user_b_id == uid),
+        )
+    ) or 0
+
+    spark_count = await db.scalar(
+        select(func.count())
+        .select_from(Summary)
+        .outerjoin(
+            SummaryDecision,
+            and_(
+                SummaryDecision.summary_id == Summary.id,
+                SummaryDecision.user_id == uid,
+            ),
+        )
+        .where(
+            Summary.host_user_id == uid,
+            Summary.verdict == "来电",
+            SummaryDecision.id.is_(None),
+        )
+    ) or 0
+
+    pending_count = await db.scalar(
+        select(func.count())
+        .select_from(Summary)
+        .outerjoin(
+            SummaryDecision,
+            and_(
+                SummaryDecision.summary_id == Summary.id,
+                SummaryDecision.user_id == uid,
+            ),
+        )
+        .where(
+            Summary.host_user_id == uid,
+            SummaryDecision.id.is_(None),
+        )
+    ) or 0
+
+    top_hint = await _build_top_hint(db, host_user_id=uid)
 
     return RoomStatusFullResponse(
         chatting_count=chatting_count,
@@ -93,130 +123,69 @@ async def get_room_status(
     )
 
 
-async def _count_chatting(uid: int) -> int:
-    async with SessionLocal() as db:
-        return await db.scalar(
-            select(func.count())
-            .select_from(AgentChat)
-            .join(Match, AgentChat.match_id == Match.id)
-            .where(
-                AgentChat.status == "running",
-                or_(Match.user_a_id == uid, Match.user_b_id == uid),
-            )
-        ) or 0
-
-
-async def _count_spark(uid: int) -> int:
-    async with SessionLocal() as db:
-        return await db.scalar(
-            select(func.count())
-            .select_from(Summary)
-            .outerjoin(
-                SummaryDecision,
-                and_(
-                    SummaryDecision.summary_id == Summary.id,
-                    SummaryDecision.user_id == uid,
-                ),
-            )
-            .where(
-                Summary.host_user_id == uid,
-                Summary.verdict == "来电",
-                SummaryDecision.id.is_(None),
-            )
-        ) or 0
-
-
-async def _count_pending(uid: int) -> int:
-    async with SessionLocal() as db:
-        return await db.scalar(
-            select(func.count())
-            .select_from(Summary)
-            .outerjoin(
-                SummaryDecision,
-                and_(
-                    SummaryDecision.summary_id == Summary.id,
-                    SummaryDecision.user_id == uid,
-                ),
-            )
-            .where(
-                Summary.host_user_id == uid,
-                SummaryDecision.id.is_(None),
-            )
-        ) or 0
-
-
-async def _build_top_hint_single_query(uid: int) -> Optional[TopHint]:
+async def _build_top_hint(db: AsyncSession, *, host_user_id: int) -> Optional[TopHint]:
     """
-    一条 SQL 拉「最新一条未决策的来电简报」+ 对方 nickname + 第一条 hook_text。
-    没有来电的简报就返回 None。
+    一条 JOIN SQL 拿到最新一条未决策的「来电」简报关键字段 + peer_id,
+    再(同 session 串行)拉 peer nickname 和第一条 hook。
+    没有来电就返 None。
     """
-    async with SessionLocal() as db:
-        # peer_user_id CASE:Match.user_a 是 host 时 peer = user_b,反之
-        # 用 PostgreSQL CASE WHEN
-        from sqlalchemy import case, literal
+    from sqlalchemy import case
 
-        peer_user_id = case(
-            (Match.user_a_id == uid, Match.user_b_id),
-            else_=Match.user_a_id,
-        ).label("peer_user_id")
+    peer_user_id = case(
+        (Match.user_a_id == host_user_id, Match.user_b_id),
+        else_=Match.user_a_id,
+    ).label("peer_user_id")
 
-        stmt = (
-            select(
-                Summary.id.label("summary_id"),
-                Summary.highlights.label("highlights"),
-                peer_user_id,
-                Match.id.label("match_id"),
-            )
-            .join(AgentChat, AgentChat.id == Summary.agent_chat_id)
-            .join(Match, Match.id == AgentChat.match_id)
-            .outerjoin(
-                SummaryDecision,
-                and_(
-                    SummaryDecision.summary_id == Summary.id,
-                    SummaryDecision.user_id == uid,
-                ),
-            )
-            .where(
-                Summary.host_user_id == uid,
-                Summary.verdict == "来电",
-                SummaryDecision.id.is_(None),
-            )
-            .order_by(Summary.created_at.desc())
-            .limit(1)
+    stmt = (
+        select(
+            Summary.id.label("summary_id"),
+            Summary.highlights.label("highlights"),
+            peer_user_id,
+            Match.id.label("match_id"),
         )
-        row = (await db.execute(stmt)).first()
-        if row is None:
-            return None
-
-        # 拉对方 nickname + 这次 match 给 host 的第一条 hook,合一个 SQL
-        peer_nick_stmt = select(UserProfile.nickname).where(
-            UserProfile.user_id == row.peer_user_id
+        .join(AgentChat, AgentChat.id == Summary.agent_chat_id)
+        .join(Match, Match.id == AgentChat.match_id)
+        .outerjoin(
+            SummaryDecision,
+            and_(
+                SummaryDecision.summary_id == Summary.id,
+                SummaryDecision.user_id == host_user_id,
+            ),
         )
-        hook_stmt = (
-            select(MatchHook.hook_text)
-            .where(
-                MatchHook.match_id == row.match_id,
-                MatchHook.target_user_id == uid,
-            )
-            .order_by(MatchHook.id)
-            .limit(1)
+        .where(
+            Summary.host_user_id == host_user_id,
+            Summary.verdict == "来电",
+            SummaryDecision.id.is_(None),
         )
-        # 两个查询小且 PG 缓存友好,串行也快;但并发更好
-        peer_nick, hook_text = await asyncio.gather(
-            db.scalar(peer_nick_stmt),
-            db.scalar(hook_stmt),
+        .order_by(Summary.created_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        return None
+
+    peer_nick = await db.scalar(
+        select(UserProfile.nickname).where(UserProfile.user_id == row.peer_user_id)
+    )
+    hook_text = await db.scalar(
+        select(MatchHook.hook_text)
+        .where(
+            MatchHook.match_id == row.match_id,
+            MatchHook.target_user_id == host_user_id,
         )
+        .order_by(MatchHook.id)
+        .limit(1)
+    )
 
-        nickname = peer_nick or f"user_{row.peer_user_id}"
-        topic: Optional[str] = None
-        if hook_text:
-            topic = hook_text
-        elif row.highlights:
-            first = row.highlights[0]
-            if isinstance(first, dict) and first.get("text"):
-                topic = first["text"][:40]
-
-        return TopHint(nickname=nickname, topic=topic)
+    nickname = peer_nick or f"user_{row.peer_user_id}"
+    topic: Optional[str] = None
+    if hook_text:
+        topic = hook_text
+    elif row.highlights:
+        first = row.highlights[0]
+        if isinstance(first, dict) and first.get("text"):
+            topic = first["text"][:40]
+    return TopHint(nickname=nickname, topic=topic)
 
 
 # ========================================
