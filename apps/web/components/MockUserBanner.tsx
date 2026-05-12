@@ -1,13 +1,13 @@
 "use client"
 
 /**
- * 开发期 Mock User 切换条 — 浮在顶部
+ * 开发期 Mock User 切换条 — 浮在底部
  *
- * Phase 1+ OAuth 接入后删掉这个组件。
+ * 仅当 NEXT_PUBLIC_DEV_MOCK_AUTH=true 时显示;prod build 应该设为 false 隐藏。
  */
 import { useEffect, useState } from "react"
 
-import { getMockUserId, setMockUserId } from "@/lib/api"
+import { getMockUserId, isDevMockAuth, setMockUserId } from "@/lib/api"
 
 export default function MockUserBanner() {
   const [mounted, setMounted] = useState(false)
@@ -19,6 +19,7 @@ export default function MockUserBanner() {
   }, [])
 
   if (!mounted) return null
+  if (!isDevMockAuth()) return null
 
   function pick(newId: string) {
     setMockUserId(newId)

@@ -1,14 +1,20 @@
 /**
- * API client · MVP 阶段 mock auth(X-Mock-User-Id 头)
+ * API client · 走 session cookie(OAuth 后),dev 模式有 mock 头 fallback
  *
  * 用法:
  *   const me = await api.get<UserMe>("/api/auth/me")
  *   const md = await api.post<MdResponse, CreateMdReq>("/api/md", { profile })
  *
- * OAuth 接入后只换 `getAuthHeader()` 实现,业务代码不动。
+ * 所有请求都带 credentials: 'include',浏览器会自动带上 cm_session cookie。
+ * dev 模式额外发 X-Mock-User-Id(后端在 cookie 缺失时 fallback 到这个头)。
  */
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || ""
+
+// 仅 dev 模式打开 mock auth header — prod build 时 NEXT_PUBLIC_DEV_MOCK_AUTH 不设
+// 就不会发出 X-Mock-User-Id,完全依赖 cookie
+const DEV_MOCK_AUTH =
+  (process.env.NEXT_PUBLIC_DEV_MOCK_AUTH || "true").toLowerCase() === "true"
 
 const MOCK_USER_KEY = "cybermomo_mock_user_id"
 
@@ -22,9 +28,14 @@ export function setMockUserId(id: string | number) {
   window.localStorage.setItem(MOCK_USER_KEY, String(id))
 }
 
+export function isDevMockAuth(): boolean {
+  return DEV_MOCK_AUTH
+}
+
 function getAuthHeader(): Record<string, string> {
-  // MVP 阶段:mock auth 头
-  // OAuth 接入后换为 Authorization Bearer 或 cookie 走默认凭证
+  // Cookie 自动走 credentials: 'include',这里只在 dev 模式下加 mock 头作 fallback
+  // 后端 deps:cookie 优先,cookie 没读到才看 mock 头
+  if (!DEV_MOCK_AUTH) return {}
   return { "X-Mock-User-Id": getMockUserId() }
 }
 
@@ -38,6 +49,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const url = `${BASE}${path}`
   const init: RequestInit = {
     method,
+    credentials: "include",  // 关键:浏览器带上 session cookie 跨域请求
     headers: {
       "Content-Type": "application/json",
       ...getAuthHeader(),
@@ -99,6 +111,7 @@ export async function streamSSE(
   const url = `${BASE}${path}`
   const resp = await fetch(url, {
     method: "POST",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",

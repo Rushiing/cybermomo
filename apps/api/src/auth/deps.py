@@ -1,39 +1,61 @@
 """
 Auth 依赖注入
 
-Phase 0 / Phase 1 早期:用 mock 注入(X-Mock-User-Id 头)
-Phase 1 OAuth 接入后:替换为 JWT cookie 解析,签名同名函数 get_current_user
-
-mock 在 dev 环境下会自动 upsert 占位用户(让前端联调不需要手工建库)。
+认证顺序:
+1. Session cookie(JWT)— 走 Google OAuth 后写入,生产环境默认走这条
+2. X-Mock-User-Id 头 — 仅 dev env 启用,自动 upsert 占位用户,本地联调用
 """
 from typing import Annotated, Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.models import User, UserProfile
+from src.auth.session import read_session_user_id
 from src.shared.db import get_session
 from src.shared.settings import get_settings
 
 
 async def get_current_user(
+    request: Request,
     x_mock_user_id: Annotated[Optional[str], Header(alias="X-Mock-User-Id")] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
     """
     返回当前登录的 User 实体。
 
-    MVP 早期:仅支持 mock(头部 X-Mock-User-Id)。
-    生产环境:替换为 OAuth JWT 解析。
+    生产:从 session cookie 读 user_id(OAuth 流程写入)
+    dev:cookie 不存在时 fallback 到 X-Mock-User-Id 头(并自动 upsert mock user)
     """
     settings = get_settings()
+
+    # 1. 优先 session cookie
+    uid_from_cookie = read_session_user_id(request)
+    if uid_from_cookie is not None:
+        user = (
+            await db.execute(select(User).where(User.id == uid_from_cookie))
+        ).scalar_one_or_none()
+        if user is not None:
+            return user
+        # cookie 解出 user_id 但 db 里没这人(账户被删?)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="session 关联的用户不存在(可能已删账户)",
+        )
+
+    # 2. dev fallback:X-Mock-User-Id 头(prod 直接返 401)
+    if not settings.is_dev:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="未登录",
+        )
 
     if x_mock_user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="未登录 — Phase 1 接 OAuth 前可用 X-Mock-User-Id 头(dev only)",
+            detail="未登录 — dev 模式可用 X-Mock-User-Id 头",
         )
 
     try:
@@ -44,42 +66,36 @@ async def get_current_user(
             detail="X-Mock-User-Id 必须是整数",
         )
 
-    # 查用户
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if user is not None:
+        return user
 
-    if user is None:
-        if not settings.is_dev:
+    # dev 环境自动 upsert 一个占位 user(让前端联调不卡)
+    # 注:前端 page load 会并发打多个 endpoint,所有都触发 upsert → race。
+    # catch IntegrityError 后 re-fetch(谁先 INSERT 谁赢,后到的拿到现存的就好)。
+    try:
+        user = User(
+            id=uid,
+            google_sub=f"mock-{uid}",
+            email=f"mock-{uid}@cybermomo.dev",
+            google_name=f"MockUser{uid}",
+            is_adult_confirmed=True,
+        )
+        db.add(user)
+        profile = UserProfile(user_id=uid, nickname=f"Mock{uid}")
+        db.add(profile)
+        await db.commit()
+        await db.refresh(user)
+    except IntegrityError:
+        await db.rollback()
+        user = (await db.execute(
+            select(User).where(User.id == uid)
+        )).scalar_one_or_none()
+        if user is None:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"user_id={uid} 不存在",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="user upsert race condition unresolvable",
             )
-        # dev 环境自动 upsert 一个占位 user(让前端联调不卡)
-        # 注:前端 page load 会并发打多个 endpoint,所有都触发 upsert → race。
-        # catch IntegrityError 后 re-fetch(谁先 INSERT 谁赢,后到的拿到现存的就好)。
-        try:
-            user = User(
-                id=uid,
-                google_sub=f"mock-{uid}",
-                email=f"mock-{uid}@cybermomo.dev",
-                google_name=f"MockUser{uid}",
-                is_adult_confirmed=True,
-            )
-            db.add(user)
-            profile = UserProfile(user_id=uid, nickname=f"Mock{uid}")
-            db.add(profile)
-            await db.commit()
-            await db.refresh(user)
-        except IntegrityError:
-            await db.rollback()
-            # 别的并发请求已经创了,re-fetch
-            user = (await db.execute(
-                select(User).where(User.id == uid)
-            )).scalar_one_or_none()
-            if user is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="user upsert race condition unresolvable",
-                )
 
     return user
 

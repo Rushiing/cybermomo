@@ -91,6 +91,26 @@ export default function MePage() {
     }
   }
 
+  // 退出登录 — armed pattern,跟解除软拉黑一致
+  const [armedLogout, setArmedLogout] = useState(false)
+
+  async function logout() {
+    if (!armedLogout) {
+      setArmedLogout(true)
+      setTimeout(() => setArmedLogout(false), 5000)
+      return
+    }
+    setArmedLogout(false)
+    try {
+      await api.post("/api/auth/logout")
+    } catch {
+      // 即使 200 失败也清前端状态;cookie 客户端无法手动清,刷到 / 让 fetch /api/auth/me 触发 401 再跳
+    } finally {
+      // 跳登录页(浏览器会发现 cookie 没了,自然回到未登录状态)
+      window.location.href = "/"
+    }
+  }
+
   return (
     <div className="min-h-screen">
       <Topbar active="me" />
@@ -278,14 +298,28 @@ export default function MePage() {
                     <span>更新日志</span>
                     <span className="text-xs text-ink-tertiary group-hover:text-ink-secondary">看 →</span>
                   </Link>
+                  <Link
+                    href="/onboarding"
+                    className="flex items-center justify-between gap-3 py-2 -mx-1 px-1 rounded hover:bg-bg-soft transition group"
+                  >
+                    <span>重读 Onboarding</span>
+                    <span className="text-xs text-ink-tertiary group-hover:text-ink-secondary">看 →</span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className={`w-full flex items-center justify-between gap-3 py-2 -mx-1 px-1 rounded transition text-left ${
+                      armedLogout ? "bg-warn-soft text-warn" : "hover:bg-bg-soft"
+                    }`}
+                  >
+                    <span>{armedLogout ? "确定退出?" : "退出登录"}</span>
+                    <span className={`text-xs ${armedLogout ? "text-warn" : "text-ink-tertiary"}`}>
+                      {armedLogout ? "再点一次" : "点 →"}
+                    </span>
+                  </button>
                   <DisabledRow label="通知设置" hint="MVP 阶段不主动推,后续接入" />
-                  <DisabledRow label="重读 Onboarding" hint="后续接入" />
-                  <DisabledRow label="退出登录" hint="OAuth 接入后启用" />
-                  <DisabledRow label="注销账户" hint="MVP 阶段邮件人工兜底" />
+                  <DisabledRow label="注销账户" hint="发邮件到 hi@cybermomo.com 人工处理" />
                 </div>
-                <p className="text-xs text-ink-tertiary mt-3 leading-relaxed">
-                  开发模式 · 用左下角 DEV 切 mock_user_id
-                </p>
               </Card>
             </Section>
           </>

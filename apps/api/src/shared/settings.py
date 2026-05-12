@@ -37,10 +37,21 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = Field(default="http://localhost:3000")
 
-    # Auth
+    # Auth · Session
     jwt_secret: str = Field(default="dev-jwt-secret-not-for-prod-replace-me")
+    # session cookie 名字 + 有效期(秒,默认 30 天)
+    session_cookie_name: str = Field(default="cm_session")
+    session_max_age: int = Field(default=30 * 24 * 3600)
+
+    # Auth · Google OAuth
     google_oauth_client_id: str = Field(default="")
     google_oauth_client_secret: str = Field(default="")
+    # OAuth 回调地址(完整 URL)— 跟 Google Console 配置一致
+    # 例:https://cybermomo-production.up.railway.app/api/auth/google/callback
+    google_oauth_redirect_uri: str = Field(default="")
+
+    # 前端域名(callback 完跳回这里 /room)
+    web_base_url: str = Field(default="http://localhost:3000")
 
     # LLM
     # 测试期:统一走 百炼(DashScope)OpenAI-compatible 端点

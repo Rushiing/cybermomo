@@ -5,9 +5,10 @@
 #   - Builder: Dockerfile(自动检测)
 #   - Variables:
 #       NEXT_PUBLIC_API_URL=https://cybermomo-production.up.railway.app
+#       NEXT_PUBLIC_DEV_MOCK_AUTH=false   # prod 关掉 mock auth fallback,藏 DEV banner
 #       PORT 由 Railway 自动注入
 #
-# 关键:NEXT_PUBLIC_API_URL 必须在 BUILD 时就有,Next.js 会 bake 进 client bundle。
+# 关键:NEXT_PUBLIC_* 必须在 BUILD 时就有,Next.js 会 bake 进 client bundle。
 # Railway service Variables 在 Dockerfile build 阶段可用,所以这块没问题。
 
 FROM node:20-alpine AS deps
@@ -20,7 +21,9 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-f
 FROM node:20-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_DEV_MOCK_AUTH=true
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_DEV_MOCK_AUTH=${NEXT_PUBLIC_DEV_MOCK_AUTH}
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
