@@ -12,7 +12,7 @@ Railway Cron Jobs 配置示例(observation sweep · 每小时):
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,15 +41,38 @@ def _require_admin(secret: Optional[str]) -> None:
 SILENCE_THRESHOLD = timedelta(hours=24)
 
 
+async def _bg_observation_and_revisit(session_id: int, host_user_id: int) -> None:
+    """BackgroundTask:跑一份观察报告 + 种 Agent 回访 conversation(LLM 重活)"""
+    try:
+        async with SessionLocal() as bg_db:
+            fresh_session = (await bg_db.execute(
+                select(ChatSession).where(ChatSession.id == session_id)
+            )).scalar_one_or_none()
+            if fresh_session:
+                await run_observation_for_session(
+                    bg_db, session=fresh_session, host_user_id=host_user_id
+                )
+    except Exception as e:
+        print(f"[sweep-bg] observation failed session={session_id} host={host_user_id}: {e}")
+
+    try:
+        await seed_revisit_after_silent_sweep(session_id, host_user_id)
+    except Exception as e:
+        print(f"[sweep-bg] revisit failed session={session_id} host={host_user_id}: {e}")
+
+
 @router.post("/observation-sweep")
 async def observation_sweep(
+    background_tasks: BackgroundTasks,
     x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
     db: AsyncSession = Depends(get_session),
 ):
     """
     扫描 active 但 last_message_at > 24h 之前的 chat_sessions,
-    标 ended_quit + 给双方各跑一份观察报告。
+    标 ended_quit(同步,快 SQL),然后用 BackgroundTask 异步跑双方
+    观察报告 + Agent 回访(慢 LLM)。
 
+    设计:cron HTTP 请求一秒返回,LLM 工作在 api 服务后台跑完。
     幂等:已结束的 session 不会重复处理。
     """
     _require_admin(x_admin_secret)
@@ -78,24 +101,11 @@ async def observation_sweep(
         session.ended_at = datetime.now(timezone.utc)
         await db.commit()
 
-        # 异步跑双方观察报告 + Agent 回访(每方一份)
+        # 调度异步 LLM 工作 — 响应返回后才开始跑(BackgroundTask 在 api 服务里跑)
         for host_uid in [session.user_a_id, session.user_b_id]:
-            try:
-                async with SessionLocal() as bg_db:
-                    fresh_session = (await bg_db.execute(
-                        select(ChatSession).where(ChatSession.id == session.id)
-                    )).scalar_one_or_none()
-                    if fresh_session:
-                        await run_observation_for_session(
-                            bg_db, session=fresh_session, host_user_id=host_uid
-                        )
-            except Exception as e:
-                print(f"[sweep] observation failed session={session.id} host={host_uid}: {e}")
-            # Agent 回访(seed 函数自带独立 SessionLocal)
-            try:
-                await seed_revisit_after_silent_sweep(session.id, host_uid)
-            except Exception as e:
-                print(f"[sweep] revisit failed session={session.id} host={host_uid}: {e}")
+            background_tasks.add_task(
+                _bg_observation_and_revisit, session.id, host_uid
+            )
 
         swept.append({
             "session_id": session.id,
@@ -107,6 +117,7 @@ async def observation_sweep(
     return {
         "cutoff": cutoff.isoformat(),
         "swept_count": len(swept),
+        "scheduled_jobs": len(swept) * 2,  # 每场 session 2 个 host job
         "sessions": swept,
     }
 
