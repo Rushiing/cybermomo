@@ -270,10 +270,18 @@ export default function RoomPage() {
                 }}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="w-2 h-2 rounded-full bg-primary" />
                     <span className="text-xs text-ink-secondary">
                       你的 Agent
+                      {(s.peer_nickname || s.peer_user_id) && (
+                        <span className="text-ink-tertiary"> · 关于 </span>
+                      )}
+                      {(s.peer_nickname || s.peer_user_id) && (
+                        <strong className="text-ink-secondary font-medium">
+                          @{s.peer_nickname || `user_${s.peer_user_id}`}
+                        </strong>
+                      )}
                       {isPreBriefing && <span className="ml-2 text-[10px] bg-primary-soft text-primary-dark rounded-full px-2 py-0.5">真人聊前简报</span>}
                       {isObservation && <span className="ml-2 text-[10px] bg-[rgba(255,215,0,0.18)] text-[#B8860B] rounded-full px-2 py-0.5">观察报告</span>}
                     </span>

@@ -228,6 +228,9 @@ export interface SummaryResponse {
   created_at: string
   user_decision?: string | null
   decided_at?: string | null
+  // 这张简报关于谁(前端卡片标题用)
+  peer_user_id?: number | null
+  peer_nickname?: string | null
   // 仅决策 chat_with_my_agent 的响应里出现 — 用于跳转 /me/agent/{id}
   agent_conversation_id?: number | null
 }

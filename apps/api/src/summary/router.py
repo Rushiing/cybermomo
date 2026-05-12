@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.auth.deps import CurrentUser
-from src.auth.models import User
+from src.auth.models import User, UserProfile
+from src.human_chat.models import ChatSession
 from src.match.models import Match
 from src.room.models import UserSoftBlocklist
 from src.shared.db import get_session
@@ -26,7 +27,13 @@ from src.summary.schemas import DecisionRequest, SummaryResponse
 router = APIRouter()
 
 
-def _to_response(s: Summary, decision: Optional[SummaryDecision] = None) -> SummaryResponse:
+def _to_response(
+    s: Summary,
+    decision: Optional[SummaryDecision] = None,
+    *,
+    peer_user_id: Optional[int] = None,
+    peer_nickname: Optional[str] = None,
+) -> SummaryResponse:
     return SummaryResponse(
         id=s.id,
         agent_chat_id=s.agent_chat_id,
@@ -41,7 +48,84 @@ def _to_response(s: Summary, decision: Optional[SummaryDecision] = None) -> Summ
         created_at=s.created_at,
         user_decision=decision.decision if decision else None,
         decided_at=decision.decided_at if decision else None,
+        peer_user_id=peer_user_id,
+        peer_nickname=peer_nickname,
     )
+
+
+async def _load_peer_info_for_summaries(
+    db: AsyncSession,
+    summaries: list[Summary],
+    *,
+    host_user_id: int,
+) -> dict[int, tuple[Optional[int], Optional[str]]]:
+    """
+    给一批 summaries 一次性查出每张 → (peer_user_id, peer_nickname)。
+    数据流:
+      - agent_chat / pre_briefing → agent_chat.match_id → matches.user_a/b
+      - human_chat_observation    → chat_sessions.user_a/b
+    没关联或对方 user 已删 → 返回 (None, None)
+    """
+    if not summaries:
+        return {}
+
+    agent_chat_ids = {s.agent_chat_id for s in summaries if s.agent_chat_id}
+    chat_session_ids = {s.chat_session_id for s in summaries if s.chat_session_id}
+
+    # agent_chat → match
+    peer_by_agent_chat: dict[int, int] = {}
+    if agent_chat_ids:
+        rows = (
+            await db.execute(
+                select(AgentChat.id, Match.user_a_id, Match.user_b_id)
+                .join(Match, Match.id == AgentChat.match_id)
+                .where(AgentChat.id.in_(agent_chat_ids))
+            )
+        ).all()
+        for r in rows:
+            peer_by_agent_chat[r.id] = (
+                r.user_b_id if r.user_a_id == host_user_id else r.user_a_id
+            )
+
+    # chat_session 直接拿 user pair
+    peer_by_chat_session: dict[int, int] = {}
+    if chat_session_ids:
+        rows = (
+            await db.execute(
+                select(
+                    ChatSession.id, ChatSession.user_a_id, ChatSession.user_b_id
+                ).where(ChatSession.id.in_(chat_session_ids))
+            )
+        ).all()
+        for r in rows:
+            peer_by_chat_session[r.id] = (
+                r.user_b_id if r.user_a_id == host_user_id else r.user_a_id
+            )
+
+    # 收集所有 peer uid 一次性查 nickname
+    peer_uid_by_summary: dict[int, int] = {}
+    for s in summaries:
+        if s.agent_chat_id and s.agent_chat_id in peer_by_agent_chat:
+            peer_uid_by_summary[s.id] = peer_by_agent_chat[s.agent_chat_id]
+        elif s.chat_session_id and s.chat_session_id in peer_by_chat_session:
+            peer_uid_by_summary[s.id] = peer_by_chat_session[s.chat_session_id]
+
+    nickname_by_uid: dict[int, str] = {}
+    all_peer_uids = set(peer_uid_by_summary.values())
+    if all_peer_uids:
+        nick_rows = (
+            await db.execute(
+                select(UserProfile.user_id, UserProfile.nickname).where(
+                    UserProfile.user_id.in_(all_peer_uids)
+                )
+            )
+        ).all()
+        nickname_by_uid = {r.user_id: r.nickname for r in nick_rows if r.nickname}
+
+    return {
+        sid: (uid, nickname_by_uid.get(uid))
+        for sid, uid in peer_uid_by_summary.items()
+    }
 
 
 @router.get("/me", response_model=list[SummaryResponse])
@@ -78,7 +162,21 @@ async def list_my_summaries(
         return (decided, verdict_rank, -s.created_at.timestamp())
 
     rows_sorted = sorted(rows, key=sort_key)
-    return [_to_response(s, decision_by_summary.get(s.id)) for s in rows_sorted]
+
+    # 一次性拉所有 summary 对应的对方 nickname(N+1 防御)
+    peer_info = await _load_peer_info_for_summaries(
+        db, rows_sorted, host_user_id=current_user.id
+    )
+
+    return [
+        _to_response(
+            s,
+            decision_by_summary.get(s.id),
+            peer_user_id=peer_info.get(s.id, (None, None))[0],
+            peer_nickname=peer_info.get(s.id, (None, None))[1],
+        )
+        for s in rows_sorted
+    ]
 
 
 @router.get("/{summary_id}", response_model=SummaryResponse)
@@ -104,7 +202,11 @@ async def get_summary(
         )
     )).scalar_one_or_none()
 
-    return _to_response(s, decision)
+    peer_info = await _load_peer_info_for_summaries(
+        db, [s], host_user_id=current_user.id
+    )
+    peer_uid, peer_nick = peer_info.get(s.id, (None, None))
+    return _to_response(s, decision, peer_user_id=peer_uid, peer_nickname=peer_nick)
 
 
 # ========================================
@@ -294,7 +396,13 @@ async def make_decision(
             db, host_user_id=current_user.id, summary_id=s.id
         )
 
-    resp = _to_response(s, decision)
+    peer_info = await _load_peer_info_for_summaries(
+        db, [s], host_user_id=current_user.id
+    )
+    peer_uid, peer_nick = peer_info.get(s.id, (None, None))
+    resp = _to_response(
+        s, decision, peer_user_id=peer_uid, peer_nickname=peer_nick
+    )
     if conv_id is not None:
         resp.agent_conversation_id = conv_id
     return resp
