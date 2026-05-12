@@ -29,6 +29,10 @@ import sys
 import urllib.error
 import urllib.request
 
+# Python 在容器里 stdout 默认块缓冲,短命脚本退出太快 print 还没 flush
+# 就被 Railway 收走,日志里看不到输出。强制 line-buffered。
+sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+
 
 def main() -> int:
     api_base = os.environ.get("API_BASE", "").rstrip("/")
