@@ -6,12 +6,13 @@
 - GET /api/room/cards       卡片流(简报卡 + 真人聊天入口卡)
 - 软拉黑相关 endpoint:GET / DELETE
 """
+import asyncio
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat
@@ -19,7 +20,7 @@ from src.auth.deps import CurrentUser
 from src.auth.models import User, UserProfile
 from src.match.models import Match, MatchHook
 from src.room.models import UserSoftBlocklist
-from src.shared.db import get_session
+from src.shared.db import SessionLocal, get_session
 from src.summary.models import Summary, SummaryDecision
 
 router = APIRouter()
@@ -60,116 +61,162 @@ async def get_room_status(
     current_user: User = CurrentUser,
     db: AsyncSession = Depends(get_session),
 ):
-    # 正在聊:status='running' 的 agent_chats 中 user 涉及的
-    chatting_q = (
-        select(AgentChat)
-        .join(Match, AgentChat.match_id == Match.id)
-        .where(
-            AgentChat.status == "running",
-            or_(Match.user_a_id == current_user.id, Match.user_b_id == current_user.id),
-        )
-    )
-    chatting = (await db.execute(chatting_q)).scalars().all()
+    """
+    返回 chatting / spark / pending 计数 + top_hint。
 
-    # 有戏:本人收到的 verdict='来电' summaries(且未决策)
-    spark_q = (
-        select(Summary)
-        .outerjoin(
-            SummaryDecision,
-            and_(
-                SummaryDecision.summary_id == Summary.id,
-                SummaryDecision.user_id == current_user.id,
-            ),
-        )
-        .where(
-            Summary.host_user_id == current_user.id,
-            Summary.verdict == "来电",
-            SummaryDecision.id.is_(None),
-        )
-    )
-    spark = (await db.execute(spark_q)).scalars().all()
+    性能:之前 7 条串行 SQL(SELECT 全部 row 后 len() + 4 个 top_hint join)。
+    优化:
+      - 计数用 COUNT() 不 fetch row
+      - 3 个独立 COUNT 用独立 sessions 并发跑
+      - top_hint 一条 JOIN 查 → 总共 3-4 个 round-trip,且大部分并行
+    """
+    uid = current_user.id
 
-    # 总待决策数
-    pending_q = (
-        select(Summary)
-        .outerjoin(
-            SummaryDecision,
-            and_(
-                SummaryDecision.summary_id == Summary.id,
-                SummaryDecision.user_id == current_user.id,
-            ),
-        )
-        .where(
-            Summary.host_user_id == current_user.id,
-            SummaryDecision.id.is_(None),
-        )
+    # 三个 COUNT + 一个 top_hint detail,全部并发
+    (
+        chatting_count,
+        spark_count,
+        pending_count,
+        top_hint,
+    ) = await asyncio.gather(
+        _count_chatting(uid),
+        _count_spark(uid),
+        _count_pending(uid),
+        _build_top_hint_single_query(uid),
     )
-    pending = (await db.execute(pending_q)).scalars().all()
-
-    # top_hint:从有戏的简报里挑最近一张,拉对方 nickname + 第一条 highlight 关键词
-    top_hint = await _build_top_hint(db, host_user_id=current_user.id, spark_summaries=spark)
 
     return RoomStatusFullResponse(
-        chatting_count=len(chatting),
-        spark_count=len(spark),
-        total_summaries_pending=len(pending),
+        chatting_count=chatting_count,
+        spark_count=spark_count,
+        total_summaries_pending=pending_count,
         top_hint=top_hint,
     )
 
 
-async def _build_top_hint(
-    db: AsyncSession,
-    *,
-    host_user_id: int,
-    spark_summaries: list[Summary],
-) -> Optional[TopHint]:
+async def _count_chatting(uid: int) -> int:
+    async with SessionLocal() as db:
+        return await db.scalar(
+            select(func.count())
+            .select_from(AgentChat)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(
+                AgentChat.status == "running",
+                or_(Match.user_a_id == uid, Match.user_b_id == uid),
+            )
+        ) or 0
+
+
+async def _count_spark(uid: int) -> int:
+    async with SessionLocal() as db:
+        return await db.scalar(
+            select(func.count())
+            .select_from(Summary)
+            .outerjoin(
+                SummaryDecision,
+                and_(
+                    SummaryDecision.summary_id == Summary.id,
+                    SummaryDecision.user_id == uid,
+                ),
+            )
+            .where(
+                Summary.host_user_id == uid,
+                Summary.verdict == "来电",
+                SummaryDecision.id.is_(None),
+            )
+        ) or 0
+
+
+async def _count_pending(uid: int) -> int:
+    async with SessionLocal() as db:
+        return await db.scalar(
+            select(func.count())
+            .select_from(Summary)
+            .outerjoin(
+                SummaryDecision,
+                and_(
+                    SummaryDecision.summary_id == Summary.id,
+                    SummaryDecision.user_id == uid,
+                ),
+            )
+            .where(
+                Summary.host_user_id == uid,
+                SummaryDecision.id.is_(None),
+            )
+        ) or 0
+
+
+async def _build_top_hint_single_query(uid: int) -> Optional[TopHint]:
     """
-    从「有戏」简报里挑最新一张,拉对方 nickname + 一句话钩子。
-    没有有戏的就返回 None(状态栏退化成"Agent 正在聊 N 个 · 0 个有戏")。
+    一条 SQL 拉「最新一条未决策的来电简报」+ 对方 nickname + 第一条 hook_text。
+    没有来电的简报就返回 None。
     """
-    if not spark_summaries:
-        return None
-    # 取最新一张
-    sm = max(spark_summaries, key=lambda s: s.created_at)
-    if sm.agent_chat_id is None:
-        return None
+    async with SessionLocal() as db:
+        # peer_user_id CASE:Match.user_a 是 host 时 peer = user_b,反之
+        # 用 PostgreSQL CASE WHEN
+        from sqlalchemy import case, literal
 
-    # 找对方 user_id
-    chat = (await db.execute(
-        select(AgentChat).where(AgentChat.id == sm.agent_chat_id)
-    )).scalar_one_or_none()
-    if chat is None:
-        return None
-    match = (await db.execute(
-        select(Match).where(Match.id == chat.match_id)
-    )).scalar_one_or_none()
-    if match is None:
-        return None
-    peer_id = match.user_b_id if match.user_a_id == host_user_id else match.user_a_id
+        peer_user_id = case(
+            (Match.user_a_id == uid, Match.user_b_id),
+            else_=Match.user_a_id,
+        ).label("peer_user_id")
 
-    # 对方 nickname
-    peer_profile = (await db.execute(
-        select(UserProfile).where(UserProfile.user_id == peer_id)
-    )).scalar_one_or_none()
-    nickname = peer_profile.nickname if peer_profile else f"user_{peer_id}"
+        stmt = (
+            select(
+                Summary.id.label("summary_id"),
+                Summary.highlights.label("highlights"),
+                peer_user_id,
+                Match.id.label("match_id"),
+            )
+            .join(AgentChat, AgentChat.id == Summary.agent_chat_id)
+            .join(Match, Match.id == AgentChat.match_id)
+            .outerjoin(
+                SummaryDecision,
+                and_(
+                    SummaryDecision.summary_id == Summary.id,
+                    SummaryDecision.user_id == uid,
+                ),
+            )
+            .where(
+                Summary.host_user_id == uid,
+                Summary.verdict == "来电",
+                SummaryDecision.id.is_(None),
+            )
+            .order_by(Summary.created_at.desc())
+            .limit(1)
+        )
+        row = (await db.execute(stmt)).first()
+        if row is None:
+            return None
 
-    # 钩子:取这次匹配里给宿主看的第一条 hook,fallback 用 summary 第一条 highlight
-    topic: Optional[str] = None
-    hook = (await db.execute(
-        select(MatchHook)
-        .where(MatchHook.match_id == match.id, MatchHook.target_user_id == host_user_id)
-        .order_by(MatchHook.id)
-        .limit(1)
-    )).scalar_one_or_none()
-    if hook and hook.hook_text:
-        topic = hook.hook_text
-    elif sm.highlights:
-        first = sm.highlights[0]
-        if isinstance(first, dict) and first.get("text"):
-            # 取前 40 字,避免状态栏被一句完整 highlight 塞满
-            topic = first["text"][:40]
+        # 拉对方 nickname + 这次 match 给 host 的第一条 hook,合一个 SQL
+        peer_nick_stmt = select(UserProfile.nickname).where(
+            UserProfile.user_id == row.peer_user_id
+        )
+        hook_stmt = (
+            select(MatchHook.hook_text)
+            .where(
+                MatchHook.match_id == row.match_id,
+                MatchHook.target_user_id == uid,
+            )
+            .order_by(MatchHook.id)
+            .limit(1)
+        )
+        # 两个查询小且 PG 缓存友好,串行也快;但并发更好
+        peer_nick, hook_text = await asyncio.gather(
+            db.scalar(peer_nick_stmt),
+            db.scalar(hook_stmt),
+        )
 
-    return TopHint(nickname=nickname, topic=topic)
+        nickname = peer_nick or f"user_{row.peer_user_id}"
+        topic: Optional[str] = None
+        if hook_text:
+            topic = hook_text
+        elif row.highlights:
+            first = row.highlights[0]
+            if isinstance(first, dict) and first.get("text"):
+                topic = first["text"][:40]
+
+        return TopHint(nickname=nickname, topic=topic)
 
 
 # ========================================

@@ -9,9 +9,10 @@ Phase 2:匹配 + Agent 互聊
 Phase 3:摘要 + 个人房间
 Phase 4:真人聊天 + callout + 观察报告
 """
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.admin.router import router as admin_router
@@ -71,7 +72,24 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Duration-Ms"],
 )
+
+
+# Timing middleware — 写 response header + 慢请求日志
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Duration-Ms"] = f"{elapsed_ms:.0f}"
+    # 只打慢请求(> 300ms),避免日志洪水
+    if elapsed_ms > 300:
+        print(
+            f"[slow] {request.method} {request.url.path} "
+            f"{elapsed_ms:.0f}ms status={response.status_code}"
+        )
+    return response
 
 
 # ========================================
