@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat
 from src.auth.deps import CurrentUser
-from src.auth.models import User
+from src.auth.models import User, UserProfile
 from src.human_chat.callout import run_callout
 from src.human_chat.models import ChatCallout, ChatMessage, ChatReport, ChatSession
 from src.human_chat.observation import run_observation_for_session
@@ -47,6 +47,39 @@ def _ensure_participant(session: ChatSession, user_id: int) -> None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="该 session 不属于你"
         )
+
+
+async def _session_to_response(
+    session: ChatSession, *, nickname_by_uid: dict[int, str] | None = None
+) -> ChatSessionResponse:
+    """ChatSession ORM → API 响应,带双方 nickname"""
+    nickname_by_uid = nickname_by_uid or {}
+    return ChatSessionResponse(
+        id=session.id,
+        match_id=session.match_id,
+        source_summary_id=session.source_summary_id,
+        user_a_id=session.user_a_id,
+        user_b_id=session.user_b_id,
+        user_a_nickname=nickname_by_uid.get(session.user_a_id),
+        user_b_nickname=nickname_by_uid.get(session.user_b_id),
+        status=session.status,
+        last_message_at=session.last_message_at,
+        created_at=session.created_at,
+    )
+
+
+async def _load_nicknames(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
+    """一次性拉一批 user_id 的 nickname"""
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(UserProfile.user_id, UserProfile.nickname).where(
+                UserProfile.user_id.in_(set(user_ids))
+            )
+        )
+    ).all()
+    return {r.user_id: r.nickname for r in rows if r.nickname}
 
 
 # ========================================
@@ -95,7 +128,8 @@ async def create_session_from_summary(
             existing.source_summary_id = summary.id
             await db.commit()
             await db.refresh(existing)
-        return existing
+        nicks = await _load_nicknames(db, [existing.user_a_id, existing.user_b_id])
+        return await _session_to_response(existing, nickname_by_uid=nicks)
 
     # 校验双方 open_human_chat decision
     decisions = (await db.execute(
@@ -126,7 +160,8 @@ async def create_session_from_summary(
     db.add(session)
     await db.commit()
     await db.refresh(session)
-    return session
+    nicks = await _load_nicknames(db, [a, b])
+    return await _session_to_response(session, nickname_by_uid=nicks)
 
 
 # ========================================
@@ -146,7 +181,11 @@ async def list_my_sessions(
             )
         ).order_by(ChatSession.created_at.desc())
     )).scalars().all()
-    return rows
+    uids: list[int] = []
+    for s in rows:
+        uids.extend([s.user_a_id, s.user_b_id])
+    nicks = await _load_nicknames(db, uids)
+    return [await _session_to_response(s, nickname_by_uid=nicks) for s in rows]
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
@@ -161,7 +200,8 @@ async def get_session_detail(
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     _ensure_participant(session, current_user.id)
-    return session
+    nicks = await _load_nicknames(db, [session.user_a_id, session.user_b_id])
+    return await _session_to_response(session, nickname_by_uid=nicks)
 
 
 # ========================================
@@ -431,4 +471,5 @@ async def exit_session(
             _trigger_agent_revisit_async, session.id, host_uid, payload.action
         )
 
-    return session
+    nicks = await _load_nicknames(db, [session.user_a_id, session.user_b_id])
+    return await _session_to_response(session, nickname_by_uid=nicks)

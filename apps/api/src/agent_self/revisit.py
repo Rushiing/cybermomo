@@ -26,6 +26,7 @@ from src.agent_self.engine import (
 )
 from src.agent_self.prompts import revisit_opener, room_decision_opener
 from src.agent_self.models import AgentConversation
+from src.auth.models import UserProfile
 from src.human_chat.models import ChatSession
 from src.shared.db import SessionLocal
 from src.summary.models import Summary
@@ -97,21 +98,34 @@ async def seed_revisit_after_chat_exit(
                 else session.user_a_id
             )
 
+            # 拉对方 nickname,标题和开场白都用它(脱敏 user_X 是给系统看的,
+            # 跟宿主交底时用 nickname 才自然)
+            peer_profile = (
+                await db.execute(
+                    select(UserProfile).where(UserProfile.user_id == peer_user_id)
+                )
+            ).scalar_one_or_none()
+            peer_nickname = peer_profile.nickname if peer_profile else None
+            display_peer = peer_nickname or f"user_{peer_user_id}"
+
             conv = await get_or_create_conversation(
                 db,
                 host_user_id=host_user_id,
                 conversation_id=None,
                 scope="revisit",
-                title=f"跟 @user_{peer_user_id} 聊完之后",
+                title=f"跟 @{display_peer} 聊完之后",
                 context_refs={
                     "chat_session_id": session_id,
                     "peer_user_id": peer_user_id,
+                    "peer_nickname": peer_nickname,
                     "exit_action": exit_action,
                 },
             )
 
             opener = revisit_opener(
-                exit_action=exit_action, peer_user_id=peer_user_id
+                exit_action=exit_action,
+                peer_nickname=peer_nickname,
+                peer_user_id=peer_user_id,
             )
             msg = await persist_assistant_message(
                 db, conversation=conv, content=opener

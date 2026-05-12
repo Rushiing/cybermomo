@@ -33,6 +33,7 @@ interface AgentChatHistoryItem {
   agent_chat_id: number
   match_id: number
   peer_user_id: number
+  peer_nickname?: string | null
   status: string
   end_reason?: string | null
   turns: number
@@ -188,7 +189,7 @@ export default function MePage() {
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 text-sm">
-                              <span className="font-medium">@user_{c.peer_user_id}</span>
+                              <span className="font-medium">@{c.peer_nickname || `user_${c.peer_user_id}`}</span>
                               {c.related_verdict && (
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${verdictBadgeClass(c.related_verdict)}`}>
                                   {c.related_verdict}

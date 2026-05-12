@@ -249,6 +249,8 @@ export interface ChatSessionResponse {
   source_summary_id?: number | null  // 从哪张简报衍生(旧 session 可能 NULL)
   user_a_id: number
   user_b_id: number
+  user_a_nickname?: string | null
+  user_b_nickname?: string | null
   status: string
   last_message_at?: string | null
   created_at: string

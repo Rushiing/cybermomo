@@ -77,11 +77,16 @@ def _format_chunks(chunks: list[ContextChunk], max_chunks: int = 8) -> str:
         return "(暂无相关记忆 — 这可能是你跟宿主第一次聊这种话题)"
     out: list[str] = []
     for i, c in enumerate(chunks[:max_chunks], 1):
-        label = {
-            "md": "宿主人格切片",
-            "summary": "过去某场简报",
-            "past_conversation": "上次对话片段",
-        }.get(c.source, c.source)
+        # summary 类型如果有对方 nickname,标头里直接带出来
+        # 让 Agent 引用时自然说出 "@nickname 那场" 而不是抽象的 "user_X"
+        if c.source == "summary":
+            peer = (c.metadata or {}).get("peer_nickname") if c.metadata else None
+            label = f"简报 · 跟 @{peer} 那场" if peer else "过去某场简报"
+        else:
+            label = {
+                "md": "宿主人格切片",
+                "past_conversation": "上次对话片段",
+            }.get(c.source, c.source)
         out.append(f"## {i}. [{label}]\n{c.text.strip()}")
     return "\n\n".join(out)
 
@@ -113,12 +118,12 @@ def build_system_prompt(
 
 REVISIT_OPENERS: dict[str, str] = {
     # 真人聊天 quit / silent
-    "quit": "嘿,刚跟 @user_{peer_id} 那场聊完了 — 怎么样,感觉对得上吗?有什么想跟我说说的?",
-    "silent": "你跟 @user_{peer_id} 那场聊着聊着就停了。是不太想接着聊,还是只是忙忘了?",
+    "quit": "嘿,刚跟 @{peer} 那场聊完了 — 怎么样,感觉对得上吗?有什么想跟我说说的?",
+    "silent": "你跟 @{peer} 那场聊着聊着就停了。是不太想接着聊,还是只是忙忘了?",
     # 真人聊天 block
-    "block": "你把 @user_{peer_id} 拉黑了 — 是哪个点出问题了?我帮你记着,以后类似的别再推。",
+    "block": "你把 @{peer} 拉黑了 — 是哪个点出问题了?我帮你记着,以后类似的别再推。",
     # 真人聊天 report
-    "report": "你举报了 @user_{peer_id} — 想聊聊发生了什么吗?平台那边我也会跟进。",
+    "report": "你举报了 @{peer} — 想聊聊发生了什么吗?平台那边我也会跟进。",
 }
 
 ROOM_DECISION_OPENER = (
@@ -127,10 +132,11 @@ ROOM_DECISION_OPENER = (
 )
 
 
-def revisit_opener(*, exit_action: str, peer_user_id: int) -> str:
+def revisit_opener(*, exit_action: str, peer_nickname: Optional[str], peer_user_id: int) -> str:
     """真人聊天结束后 Agent 回访时的第一句话"""
     tpl = REVISIT_OPENERS.get(exit_action, REVISIT_OPENERS["quit"])
-    return tpl.format(peer_id=peer_user_id)
+    peer = peer_nickname or f"user_{peer_user_id}"
+    return tpl.format(peer=peer)
 
 
 def room_decision_opener(*, verdict: str) -> str:

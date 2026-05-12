@@ -184,6 +184,9 @@ export default function RoomPage() {
             </div>
             {activeSessions.map(s => {
               const otherUid = s.user_a_id === myUid ? s.user_b_id : s.user_a_id
+              const otherNick = s.user_a_id === myUid ? s.user_b_nickname : s.user_a_nickname
+              const displayName = otherNick || `user_${otherUid}`
+              const avatarChar = (otherNick || `U${otherUid}`).charAt(0)
               const sourceSum = s.source_summary_id != null ? summaryById[s.source_summary_id] : null
               return (
                 <Link
@@ -194,10 +197,10 @@ export default function RoomPage() {
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
-                        U{otherUid}
+                        {avatarChar}
                       </div>
                       <div>
-                        <div className="font-semibold text-primary-dark">和 @user_{otherUid} 的真人聊天</div>
+                        <div className="font-semibold text-primary-dark">和 @{displayName} 的真人聊天</div>
                         <div className="text-xs text-ink-secondary mt-0.5">
                           {s.last_message_at
                             ? `最近一条 ${new Date(s.last_message_at).toLocaleString("zh-CN")}`

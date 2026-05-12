@@ -20,6 +20,7 @@ interface AgentChatHistoryItem {
   agent_chat_id: number
   match_id: number
   peer_user_id: number
+  peer_nickname?: string | null
   status: string
   end_reason?: string | null
   turns: number
@@ -194,15 +195,18 @@ function ChatRow({
     </span>
   ) : null
 
+  const displayName = c.peer_nickname || `user_${c.peer_user_id}`
+  const avatarChar = (c.peer_nickname || `U${c.peer_user_id}`).charAt(0)
+
   const Inner = (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
-          U{c.peer_user_id}
+          {avatarChar}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm flex-wrap">
-            <span className="font-medium">@user_{c.peer_user_id}</span>
+            <span className="font-medium">@{displayName}</span>
             {verdictBadge}
             {c.status === "running" && (
               <span className="text-[10px] text-primary-dark border border-primary-soft rounded-full px-1.5 py-0.5">聊着</span>

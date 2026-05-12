@@ -181,16 +181,27 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
           </svg>
         </button>
         <div className="flex items-center gap-3 flex-1">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
-            {otherUid ? `U${otherUid}` : "?"}
-          </div>
-          <div>
-            <div className="font-semibold text-[15px]">@user_{otherUid}</div>
-            <div className="text-[11.5px] text-ink-secondary flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-              {sessionEnded ? `已结束(${session?.status})` : "在线"}
-            </div>
-          </div>
+          {(() => {
+            const otherNick = session && otherUid != null
+              ? (session.user_a_id === myUid ? session.user_b_nickname : session.user_a_nickname)
+              : null
+            const displayName = otherNick || (otherUid != null ? `user_${otherUid}` : "?")
+            const avatarChar = (otherNick || (otherUid != null ? `U${otherUid}` : "?")).charAt(0)
+            return (
+              <>
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
+                  {avatarChar}
+                </div>
+                <div>
+                  <div className="font-semibold text-[15px]">@{displayName}</div>
+                  <div className="text-[11.5px] text-ink-secondary flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                    {sessionEnded ? `已结束(${session?.status})` : "在线"}
+                  </div>
+                </div>
+              </>
+            )
+          })()}
         </div>
         <button onClick={() => setMenuOpen(!menuOpen)} className="w-9 h-9 rounded-md hover:bg-bg-soft flex items-center justify-center">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">

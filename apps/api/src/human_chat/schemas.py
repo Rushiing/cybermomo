@@ -15,6 +15,8 @@ class ChatSessionResponse(BaseModel):
     source_summary_id: Optional[int] = None  # 从哪张简报衍生而来(旧 session 可能为 NULL)
     user_a_id: int
     user_b_id: int
+    user_a_nickname: Optional[str] = None  # 前端展示用 — 比 user_X 友好
+    user_b_nickname: Optional[str] = None
     status: str
     last_message_at: Optional[datetime] = None
     created_at: datetime

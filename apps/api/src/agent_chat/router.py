@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.auth.deps import CurrentUser
-from src.auth.models import User
+from src.auth.models import User, UserProfile
 from src.match.models import Match
 from src.shared.db import get_session
 from src.summary.models import Summary, SummaryDecision
@@ -32,6 +32,7 @@ class AgentChatHistoryItem(BaseModel):
     agent_chat_id: int
     match_id: int
     peer_user_id: int  # 平台脱敏前的对方 user_id(前端按需展示 user_X)
+    peer_nickname: Optional[str] = None  # 优先展示
     status: str
     end_reason: Optional[str] = None
     turns: int  # 该场实际跑了几轮
@@ -97,7 +98,24 @@ async def list_my_agent_chats(
         )).scalars().all()
     decision_by_summary: dict[int, SummaryDecision] = {d.summary_id: d for d in decisions}
 
-    # 5. 组装
+    # 5. 拉所有 peer nickname(一次性 IN)
+    peer_ids: set[int] = set()
+    for chat, match in rows:
+        peer_ids.add(
+            match.user_b_id if match.user_a_id == current_user.id else match.user_a_id
+        )
+    nickname_by_uid: dict[int, str] = {}
+    if peer_ids:
+        nick_rows = (
+            await db.execute(
+                select(UserProfile.user_id, UserProfile.nickname).where(
+                    UserProfile.user_id.in_(peer_ids)
+                )
+            )
+        ).all()
+        nickname_by_uid = {r.user_id: r.nickname for r in nick_rows if r.nickname}
+
+    # 6. 组装
     out: list[AgentChatHistoryItem] = []
     for chat, match in rows:
         peer_id = match.user_b_id if match.user_a_id == current_user.id else match.user_a_id
@@ -107,6 +125,7 @@ async def list_my_agent_chats(
             agent_chat_id=chat.id,
             match_id=chat.match_id,
             peer_user_id=peer_id,
+            peer_nickname=nickname_by_uid.get(peer_id),
             status=chat.status,
             end_reason=chat.end_reason,
             turns=turns_by_chat.get(chat.id, 0),

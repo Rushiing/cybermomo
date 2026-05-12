@@ -21,8 +21,11 @@ from typing import Literal, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agent_chat.models import AgentChat
 from src.agent_self.models import AgentConversation, AgentConversationMessage
+from src.auth.models import UserProfile
 from src.llm.gateway import llm_embed
+from src.match.models import Match
 from src.md.models import MdSegment
 from src.summary.models import Summary
 
@@ -104,7 +107,8 @@ async def retrieve_context(
             metadata={"segment_type": row.segment_type},
         ))
 
-    # --- summaries(宿主自己的简报)---
+    # --- summaries(宿主自己的简报)+ join 出对方 nickname,给 Agent 用 ---
+    # summary → agent_chat → match → (peer = 非 host 那一侧) → user_profiles
     sm_q = (
         select(
             Summary.id,
@@ -114,19 +118,49 @@ async def retrieve_context(
             Summary.risks,
             Summary.recommended_action,
             Summary.embedding.cosine_distance(qv).label("distance"),
+            Match.user_a_id,
+            Match.user_b_id,
         )
+        .outerjoin(AgentChat, AgentChat.id == Summary.agent_chat_id)
+        .outerjoin(Match, Match.id == AgentChat.match_id)
         .where(Summary.host_user_id == user_id)
         .where(Summary.embedding.is_not(None))
         .order_by("distance")
         .limit(top_k_per_source)
     )
-    for row in (await db.execute(sm_q)).all():
+    sm_rows = (await db.execute(sm_q)).all()
+
+    # 拉所有出现过的 peer 的 nickname,一次性 IN 查询,避免 N+1
+    peer_ids: set[int] = set()
+    for row in sm_rows:
+        if row.user_a_id is None or row.user_b_id is None:
+            continue
+        peer_id = row.user_b_id if row.user_a_id == user_id else row.user_a_id
+        peer_ids.add(peer_id)
+    nickname_by_uid: dict[int, str] = {}
+    if peer_ids:
+        nick_rows = (
+            await db.execute(
+                select(UserProfile.user_id, UserProfile.nickname).where(
+                    UserProfile.user_id.in_(peer_ids)
+                )
+            )
+        ).all()
+        nickname_by_uid = {r.user_id: r.nickname for r in nick_rows if r.nickname}
+
+    for row in sm_rows:
+        peer_id: Optional[int] = None
+        if row.user_a_id is not None and row.user_b_id is not None:
+            peer_id = row.user_b_id if row.user_a_id == user_id else row.user_a_id
+        peer_nickname = nickname_by_uid.get(peer_id) if peer_id else None
+
         # 把 summary 转成可读文本,RAG 看上下文时一眼明白
         text = _format_summary_for_rag(
             verdict=row.verdict,
             highlights=row.highlights,
             risks=row.risks,
             recommended=row.recommended_action,
+            peer_nickname=peer_nickname,
         )
         out.append(ContextChunk(
             source="summary",
@@ -136,6 +170,8 @@ async def retrieve_context(
             metadata={
                 "verdict": row.verdict,
                 "summary_type": row.summary_type,
+                "peer_user_id": peer_id,
+                "peer_nickname": peer_nickname,
             },
         ))
 
@@ -184,9 +220,11 @@ def _format_summary_for_rag(
     highlights: list,
     risks: list,
     recommended: str,
+    peer_nickname: Optional[str] = None,
 ) -> str:
     """把 summary 字段拼成 LLM 看得懂的可读文本"""
-    parts: list[str] = [f"判断: {verdict}"]
+    head = f"跟 @{peer_nickname} 那场" if peer_nickname else "某场互聊"
+    parts: list[str] = [f"{head} · 判断: {verdict}"]
     for h in (highlights or [])[:3]:
         if isinstance(h, dict) and h.get("text"):
             parts.append(f"看点: {h['text']}")
