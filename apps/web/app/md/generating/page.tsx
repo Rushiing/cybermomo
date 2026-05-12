@@ -12,31 +12,30 @@ import { useEffect, useState } from "react"
 const LINES = [
   "嗯…让我把你刚才答的过一遍。",
   "你这种节奏的味道,我有数了。",
-  "几个细节我得回味一下,马上好。",
 ]
 
 export default function GeneratingPage() {
   const router = useRouter()
   const [shown, setShown] = useState(0)
-  const [pct, setPct] = useState(10)
+  const [pct, setPct] = useState(20)
 
+  // 缩短到 ~700ms — v3 是前端规则引擎,本来已经生成完了,过场感不必那么长
   useEffect(() => {
-    const t1 = setTimeout(() => setShown(1), 400)
-    const t2 = setTimeout(() => setShown(2), 1100)
-    const t3 = setTimeout(() => setShown(3), 1900)
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3) }
+    const t1 = setTimeout(() => setShown(1), 100)
+    const t2 = setTimeout(() => setShown(2), 400)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [])
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setPct(p => Math.min(100, p + 4))
-    }, 80)
+      setPct(p => Math.min(100, p + 12))
+    }, 60)
     return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
     if (pct >= 100) {
-      const t = setTimeout(() => router.push("/md/review"), 400)
+      const t = setTimeout(() => router.push("/md/review"), 150)
       return () => clearTimeout(t)
     }
   }, [pct, router])

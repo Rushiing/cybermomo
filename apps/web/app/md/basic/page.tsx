@@ -10,6 +10,7 @@
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
+import MbtiPicker from "@/components/MbtiPicker"
 import { api, type UpsertProfileRequest, type UserMeResponse } from "@/lib/api"
 
 const AGE_OPTIONS = ["18-25", "25-30", "30-35", "35-40", "40+"] as const
@@ -19,14 +20,14 @@ const GENDER_OPTIONS = [
   { val: "non_binary", label: "非二元" },
   { val: "prefer_not_to_say", label: "不愿透露" },
 ] as const
-const MBTI_QUICK = ["不知道", "INTJ", "INFJ", "INTP", "ENFP", "ISTJ", "… 其他"]
 
 export default function MdBasicPage() {
   const router = useRouter()
   const [nickname, setNickname] = useState("MOMO")
   const [ageBand, setAgeBand] = useState<string>("25-30")
   const [gender, setGender] = useState<string>("male")
-  const [mbti, setMbti] = useState<string>("INFJ")
+  // MBTI:null = 不知道或没填全;"INFJ" 之类完整串才会保存
+  const [mbti, setMbti] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -52,7 +53,7 @@ export default function MdBasicPage() {
           nickname: nickname.trim(),
           age_band: ageBand,
           gender: gender,
-          mbti: mbti === "不知道" || mbti === "… 其他" ? undefined : mbti,
+          mbti: mbti || undefined,
         },
       }
       await api.put("/api/auth/me/profile", body)
@@ -132,13 +133,9 @@ export default function MdBasicPage() {
           />
         </Field>
 
-        {/* MBTI */}
+        {/* MBTI · 四维各选一,自由组合 */}
         <Field label="MBTI(可选)">
-          <ChipsRow
-            options={MBTI_QUICK.map(m => ({ val: m, label: m }))}
-            value={mbti}
-            onChange={setMbti}
-          />
+          <MbtiPicker value={mbti} onChange={setMbti} />
         </Field>
 
         {error && (
@@ -197,3 +194,4 @@ function ChipsRow<T extends string>(p: {
     </div>
   )
 }
+

@@ -14,14 +14,31 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 
+import MbtiPicker from "@/components/MbtiPicker"
 import Toast from "@/components/Toast"
 import Topbar from "@/components/Topbar"
 import {
   api,
   type MdDocumentResponse,
+  type UpsertProfileRequest,
   type UserMeResponse,
   getMockUserId,
 } from "@/lib/api"
+
+const AGE_OPTIONS = ["18-25", "25-30", "30-35", "35-40", "40+"] as const
+const GENDER_OPTIONS = [
+  { val: "female", label: "女" },
+  { val: "male", label: "男" },
+  { val: "non_binary", label: "非二元" },
+  { val: "prefer_not_to_say", label: "不愿透露" },
+] as const
+
+const GENDER_LABEL: Record<string, string> = {
+  female: "女",
+  male: "男",
+  non_binary: "非二元",
+  prefer_not_to_say: "不愿透露",
+}
 
 interface SoftBlockEntry {
   blocked_user_id: number
@@ -172,17 +189,14 @@ export default function MePage() {
 
             {/* 我的资料 */}
             <Section title="我的资料">
-              <Card>
-                <div className="text-sm space-y-2 text-ink">
-                  <Row label="昵称" value={me?.profile?.nickname || "未设置"} />
-                  <Row label="年龄段" value={me?.profile?.age_band || "未设置"} />
-                  <Row label="性别" value={me?.profile?.gender || "未设置"} />
-                  <Row label="MBTI" value={me?.profile?.mbti || "未设置"} />
-                </div>
-                <Link href="/md/basic" className="mt-4 inline-block text-sm text-primary border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition font-medium">
-                  修改资料
-                </Link>
-              </Card>
+              <ProfileCard
+                me={me}
+                onSaved={(updated) => {
+                  setMe(updated)
+                  setNotice("资料已保存。")
+                }}
+                onError={(msg) => setNotice(msg)}
+              />
             </Section>
 
             {/* Agent 替我聊过的所有场次 */}
@@ -378,4 +392,156 @@ function decisionLabelMe(d: string): string {
     chat_with_my_agent: "调方向",
   }
   return map[d] || d
+}
+
+// 我的资料卡 — 视图 / 编辑两态切换,不跳回问卷流程
+function ProfileCard({
+  me,
+  onSaved,
+  onError,
+}: {
+  me: UserMeResponse | null
+  onSaved: (updated: UserMeResponse) => void
+  onError: (msg: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [nickname, setNickname] = useState("")
+  const [ageBand, setAgeBand] = useState<string>("")
+  const [gender, setGender] = useState<string>("")
+  const [mbti, setMbti] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  function startEdit() {
+    setNickname(me?.profile?.nickname || "")
+    setAgeBand(me?.profile?.age_band || AGE_OPTIONS[1])
+    setGender(me?.profile?.gender || "prefer_not_to_say")
+    setMbti(me?.profile?.mbti || null)
+    setEditing(true)
+  }
+
+  async function save() {
+    if (!nickname.trim()) {
+      onError("昵称不能为空")
+      return
+    }
+    setSaving(true)
+    try {
+      const body: UpsertProfileRequest = {
+        profile: {
+          nickname: nickname.trim(),
+          age_band: ageBand,
+          gender,
+          mbti: mbti || undefined,
+        },
+      }
+      const updated = await api.put<UserMeResponse, UpsertProfileRequest>(
+        "/api/auth/me/profile", body,
+      )
+      onSaved(updated)
+      setEditing(false)
+    } catch (e: any) {
+      onError(e?.detail || e?.message || "保存失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <Card>
+        <div className="text-sm space-y-2 text-ink">
+          <Row label="昵称" value={me?.profile?.nickname || "未设置"} />
+          <Row label="年龄段" value={me?.profile?.age_band || "未设置"} />
+          <Row label="性别" value={GENDER_LABEL[me?.profile?.gender || ""] || "未设置"} />
+          <Row label="MBTI" value={me?.profile?.mbti || "未设置"} />
+        </div>
+        <button
+          onClick={startEdit}
+          className="mt-4 inline-block text-sm text-primary border-[1.5px] border-primary px-4 py-2 rounded-full hover:bg-primary-soft transition font-medium"
+        >
+          修改资料
+        </button>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <div className="space-y-4">
+        <div>
+          <div className="text-[12px] text-ink-secondary mb-1.5">昵称</div>
+          <input
+            value={nickname}
+            onChange={e => setNickname(e.target.value)}
+            maxLength={20}
+            className="w-full px-3 py-2 border-[1.5px] border-line-soft rounded-md text-sm focus:outline-none focus:border-primary bg-bg-elevated"
+          />
+        </div>
+
+        <div>
+          <div className="text-[12px] text-ink-secondary mb-1.5">年龄段</div>
+          <ChipsRow
+            options={AGE_OPTIONS.map(a => ({ val: a, label: a }))}
+            value={ageBand}
+            onChange={setAgeBand}
+          />
+        </div>
+
+        <div>
+          <div className="text-[12px] text-ink-secondary mb-1.5">性别</div>
+          <ChipsRow
+            options={GENDER_OPTIONS as any}
+            value={gender}
+            onChange={setGender}
+          />
+        </div>
+
+        <div>
+          <div className="text-[12px] text-ink-secondary mb-1.5">MBTI</div>
+          <MbtiPicker value={mbti} onChange={setMbti} />
+        </div>
+
+        <div className="flex items-center gap-2 pt-2 border-t border-line-soft">
+          <button
+            onClick={save}
+            disabled={saving || !nickname.trim()}
+            className="bg-primary text-white px-5 py-2 rounded-full text-sm font-medium hover:bg-primary-dark transition disabled:opacity-40"
+          >
+            {saving ? "保存中…" : "保存"}
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            disabled={saving}
+            className="text-sm text-ink-secondary hover:text-ink px-3 py-2 transition"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function ChipsRow<T extends string>(p: {
+  options: { val: T; label: string }[]
+  value: T
+  onChange: (v: T) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {p.options.map(o => (
+        <button
+          key={o.val}
+          onClick={() => p.onChange(o.val)}
+          className={`px-3.5 py-1.5 rounded-full border-[1.5px] text-[13px] transition ${
+            o.val === p.value
+              ? "bg-primary-soft border-primary text-primary-dark font-medium"
+              : "bg-bg-elevated border-line-soft text-ink hover:border-ink-secondary"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
 }
