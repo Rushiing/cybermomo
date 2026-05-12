@@ -317,18 +317,30 @@ async def _upsert_user_from_google(
         await db.commit()
         await db.refresh(user)
         return user
-    except IntegrityError:
-        # 并发:谁先 INSERT 谁赢,后到的 re-fetch
+    except IntegrityError as e:
+        # 完整异常打到日志方便定位(orig 是 asyncpg / psycopg 的底层异常)
+        print(f"[oauth upsert] IntegrityError: {e}; orig={getattr(e, 'orig', None)!r}")
         await db.rollback()
+        # 并发场景:谁先 INSERT 谁赢,后到的 re-fetch 拿到现存的
         user = (
             await db.execute(select(User).where(User.google_sub == google_sub))
         ).scalar_one_or_none()
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="user upsert race condition unresolvable",
-            )
-        return user
+        if user is not None:
+            return user
+        # 不是并发 — 是真的 INSERT 失败(NOT NULL / CHECK / 其它 UNIQUE)
+        # 把底层 SQL 错误 surface 出来,前端能看
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"user upsert failed: {str(getattr(e, 'orig', e))[:300]}",
+        )
+    except Exception as e:
+        # 非 IntegrityError(连接错 / 序列号错 / 等)— 也吐细节出来
+        print(f"[oauth upsert] non-integrity error: {type(e).__name__}: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"user upsert failed: {type(e).__name__}: {str(e)[:300]}",
+        )
 
 
 def _redirect_to_web_with_error(code: str) -> RedirectResponse:
