@@ -1,6 +1,6 @@
 """drop 'chat_with_my_agent' rows from summary_decisions
 
-Revision ID: 20260513_drop_chat_with_my_agent_decisions
+Revision ID: 20260513_drop_cwma_decisions
 Revises: 20260512_resync_users_id_seq
 Create Date: 2026-05-13 12:00:00
 
@@ -10,12 +10,15 @@ chat_with_my_agent 行没业务意义(只是个 lock,挡住用户后续真决策
 一律删掉,让卡片重新开放给真决策。
 
 AgentConversation(scope=room)那一头不动 — 对话记录是有价值的,保留。
+
+注:revision id 必须 ≤ 32 字符(alembic_version.version_num 类型 varchar(32)),
+所以缩写为 'drop_cwma_decisions'(cwma = chat_with_my_agent)。
 """
 from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "20260513_drop_chat_with_my_agent_decisions"
+revision: str = "20260513_drop_cwma_decisions"
 down_revision: Union[str, None] = "20260512_resync_users_id_seq"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
