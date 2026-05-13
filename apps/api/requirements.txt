@@ -16,6 +16,7 @@ pgvector==0.3.6
 python-jose[cryptography]==3.3.0
 authlib==1.3.2
 httpx==0.28.1
+passlib[bcrypt]==1.7.4
 
 # LLM
 # 测试期统一走 百炼(DashScope)的 OpenAI-compatible 端点 → deepseek-v4-flash

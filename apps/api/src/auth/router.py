@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from jose import jwt as jose_jwt
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,14 @@ from sqlalchemy.orm import selectinload
 
 from src.auth.deps import CurrentUser
 from src.auth.models import User, UserProfile
-from src.auth.schemas import UpsertProfileRequest, UserMeResponse, UserProfilePayload
+from src.auth.password import hash_password, verify_password
+from src.auth.schemas import (
+    LoginRequest,
+    RegisterRequest,
+    UpsertProfileRequest,
+    UserMeResponse,
+    UserProfilePayload,
+)
 from src.auth.session import (
     clear_oauth_state_cookie,
     clear_session_cookie,
@@ -59,6 +66,7 @@ async def me(
     return UserMeResponse(
         id=current_user.id,
         email=current_user.email,
+        username=current_user.username,
         google_name=current_user.google_name,
         is_adult_confirmed=current_user.is_adult_confirmed,
         onboarded_at=current_user.onboarded_at,
@@ -115,6 +123,126 @@ async def upsert_profile(
         created_at=current_user.created_at,
         profile=profile_in,
     )
+
+
+# ========================================
+# 用户名 + 密码注册 / 登录(第二条路径,跟 Google OAuth 并行)
+# ========================================
+
+
+@router.post("/register", response_model=UserMeResponse)
+async def register(
+    payload: RegisterRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用户名 + 密码注册(邮箱选填,**不校验真实性**)。
+    - 校验 username 唯一(partial unique index 已经在 DB 兜底)
+    - 创建 User + 写 session cookie + 返回 UserMeResponse
+    - 不创建 UserProfile(留到 onboarding 流程)
+    """
+    # username 唯一性预检
+    exists = (await db.execute(
+        select(User).where(User.username == payload.username)
+    )).scalar_one_or_none()
+    if exists is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="用户名已被占用",
+        )
+
+    user = User(
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+        email=payload.email or None,
+        google_sub=None,  # 密码用户没 sub
+        google_name=payload.nickname or payload.username,
+        is_adult_confirmed=False,
+    )
+    db.add(user)
+
+    # 若用户在注册时填了昵称,直接建 profile 占位(后续 /md/basic 可改)
+    if payload.nickname:
+        profile = UserProfile(user=user, nickname=payload.nickname)
+        db.add(profile)
+
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        # username unique 索引 race 兜底
+        print(f"[register] IntegrityError: {e}; orig={getattr(e, 'orig', None)!r}")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="注册冲突 — 请换个用户名重试",
+        )
+    await db.refresh(user)
+
+    # 重新拉(带 profile)
+    user_loaded = (await db.execute(
+        select(User).where(User.id == user.id)
+    )).scalar_one()
+
+    profile_payload = None
+    if payload.nickname:
+        profile_payload = UserProfilePayload(nickname=payload.nickname)
+
+    resp = JSONResponse(content=UserMeResponse(
+        id=user_loaded.id,
+        email=user_loaded.email,
+        username=user_loaded.username,
+        google_name=user_loaded.google_name,
+        is_adult_confirmed=user_loaded.is_adult_confirmed,
+        onboarded_at=user_loaded.onboarded_at,
+        created_at=user_loaded.created_at,
+        profile=profile_payload,
+    ).model_dump(mode="json"))
+    set_session_cookie(resp, user_loaded.id)
+    return resp
+
+
+@router.post("/login", response_model=UserMeResponse)
+async def login(
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """用户名 + 密码登录。失败一律返 401(不区分 user 不存在 vs 密码错),避免枚举攻击。"""
+    user = (await db.execute(
+        select(User).where(User.username == payload.username)
+    )).scalar_one_or_none()
+
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+        )
+
+    # 再拉一次带 profile(避免 selectinload race)
+    user_loaded = (await db.execute(
+        select(User).where(User.id == user.id)
+    )).scalar_one()
+    profile_payload = None
+    if user_loaded.profile is not None:
+        profile_payload = UserProfilePayload(
+            nickname=user_loaded.profile.nickname,
+            age_band=user_loaded.profile.age_band,
+            gender=user_loaded.profile.gender,
+            mbti=user_loaded.profile.mbti,
+            avatar_url=user_loaded.profile.avatar_url,
+        )
+
+    resp = JSONResponse(content=UserMeResponse(
+        id=user_loaded.id,
+        email=user_loaded.email,
+        username=user_loaded.username,
+        google_name=user_loaded.google_name,
+        is_adult_confirmed=user_loaded.is_adult_confirmed,
+        onboarded_at=user_loaded.onboarded_at,
+        created_at=user_loaded.created_at,
+        profile=profile_payload,
+    ).model_dump(mode="json"))
+    set_session_cookie(resp, user_loaded.id)
+    return resp
 
 
 # ========================================

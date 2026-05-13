@@ -25,9 +25,24 @@ class UserMeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    email: str
+    email: Optional[str] = None  # 现在可空(密码注册可选填)
+    username: Optional[str] = None  # 密码用户的登录 id
     google_name: Optional[str] = None
     is_adult_confirmed: bool
     onboarded_at: Optional[datetime] = None
     created_at: datetime
     profile: Optional[UserProfilePayload] = None
+
+
+class RegisterRequest(BaseModel):
+    """POST /api/auth/register · 用户名 + 密码注册(邮箱选填,不验证)"""
+    username: str = Field(min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
+    password: str = Field(min_length=8, max_length=100)
+    email: Optional[str] = Field(default=None, max_length=200)
+    nickname: Optional[str] = Field(default=None, min_length=1, max_length=20)
+
+
+class LoginRequest(BaseModel):
+    """POST /api/auth/login"""
+    username: str = Field(min_length=3, max_length=20)
+    password: str = Field(min_length=1, max_length=100)
