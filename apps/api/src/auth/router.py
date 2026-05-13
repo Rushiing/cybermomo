@@ -176,28 +176,25 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="注册冲突 — 请换个用户名重试",
         )
+    # refresh 一次拿 server_default 字段(is_adult_confirmed / created_at /
+    # onboarded_at NULL),profile 是我们刚 add 的、值在内存里已知 — 无需再 SELECT
     await db.refresh(user)
 
-    # 重新拉(带 profile)
-    user_loaded = (await db.execute(
-        select(User).where(User.id == user.id)
-    )).scalar_one()
-
-    profile_payload = None
-    if payload.nickname:
-        profile_payload = UserProfilePayload(nickname=payload.nickname)
+    profile_payload = (
+        UserProfilePayload(nickname=payload.nickname) if payload.nickname else None
+    )
 
     resp = JSONResponse(content=UserMeResponse(
-        id=user_loaded.id,
-        email=user_loaded.email,
-        username=user_loaded.username,
-        google_name=user_loaded.google_name,
-        is_adult_confirmed=user_loaded.is_adult_confirmed,
-        onboarded_at=user_loaded.onboarded_at,
-        created_at=user_loaded.created_at,
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        google_name=user.google_name,
+        is_adult_confirmed=user.is_adult_confirmed,
+        onboarded_at=user.onboarded_at,
+        created_at=user.created_at,
         profile=profile_payload,
     ).model_dump(mode="json"))
-    set_session_cookie(resp, user_loaded.id)
+    set_session_cookie(resp, user.id)
     return resp
 
 
@@ -207,8 +204,11 @@ async def login(
     db: AsyncSession = Depends(get_session),
 ):
     """用户名 + 密码登录。失败一律返 401(不区分 user 不存在 vs 密码错),避免枚举攻击。"""
+    # 一次查 user + profile(eager load,省一个 RTT)
     user = (await db.execute(
-        select(User).where(User.username == payload.username)
+        select(User)
+        .options(selectinload(User.profile))
+        .where(User.username == payload.username)
     )).scalar_one_or_none()
 
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -217,31 +217,27 @@ async def login(
             detail="用户名或密码错误",
         )
 
-    # 再拉一次带 profile(避免 selectinload race)
-    user_loaded = (await db.execute(
-        select(User).where(User.id == user.id)
-    )).scalar_one()
     profile_payload = None
-    if user_loaded.profile is not None:
+    if user.profile is not None:
         profile_payload = UserProfilePayload(
-            nickname=user_loaded.profile.nickname,
-            age_band=user_loaded.profile.age_band,
-            gender=user_loaded.profile.gender,
-            mbti=user_loaded.profile.mbti,
-            avatar_url=user_loaded.profile.avatar_url,
+            nickname=user.profile.nickname,
+            age_band=user.profile.age_band,
+            gender=user.profile.gender,
+            mbti=user.profile.mbti,
+            avatar_url=user.profile.avatar_url,
         )
 
     resp = JSONResponse(content=UserMeResponse(
-        id=user_loaded.id,
-        email=user_loaded.email,
-        username=user_loaded.username,
-        google_name=user_loaded.google_name,
-        is_adult_confirmed=user_loaded.is_adult_confirmed,
-        onboarded_at=user_loaded.onboarded_at,
-        created_at=user_loaded.created_at,
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        google_name=user.google_name,
+        is_adult_confirmed=user.is_adult_confirmed,
+        onboarded_at=user.onboarded_at,
+        created_at=user.created_at,
         profile=profile_payload,
     ).model_dump(mode="json"))
-    set_session_cookie(resp, user_loaded.id)
+    set_session_cookie(resp, user.id)
     return resp
 
 

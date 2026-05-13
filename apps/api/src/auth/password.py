@@ -27,10 +27,14 @@ def _prehash(plain: str) -> bytes:
 
 
 def hash_password(plain: str) -> str:
-    """对明文密码做 bcrypt 哈希,返回可直接存 DB 的字符串"""
+    """对明文密码做 bcrypt 哈希,返回可直接存 DB 的字符串。
+
+    rounds=10 是 OWASP 2024 推荐下限,Railway shared CPU 上 ~100-200ms;
+    rounds=12 在我们的硬件上要 1-2s,注册请求慢得肉眼可见(实测 4.2s)。
+    """
     if not plain:
         raise ValueError("password cannot be empty")
-    salt = bcrypt.gensalt(rounds=12)
+    salt = bcrypt.gensalt(rounds=10)
     return bcrypt.hashpw(_prehash(plain), salt).decode("ascii")
 
 
