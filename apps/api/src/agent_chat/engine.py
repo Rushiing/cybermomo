@@ -162,12 +162,18 @@ async def run_agent_chat(
     match: Match,
     max_turns: int = 8,
     avoid_topic_refs: Optional[list[str]] = None,
+    direction_hint: Optional[str] = None,
+    direction_target_user_id: Optional[int] = None,
 ) -> AgentChat:
     """
     给 match 启 Agent 互聊。
     返回 AgentChat 实体(status 已结算)。
 
     avoid_topic_refs:再派一次时传上一场出现过的 topic_ref 列表,提示 Agent 换话题。
+
+    direction_hint + direction_target_user_id:宿主从「跟我 Agent 聊聊」里沉淀的
+    新方向(短文本),只注入指定 user 那一侧 Agent 的 prompt — 让 TA 的 Agent
+    顺着这个方向去探。对方 Agent 看不到。
     """
     # 创建 agent_chat
     chat = AgentChat(match_id=match.id, status="running")
@@ -208,6 +214,12 @@ async def run_agent_chat(
 
     for turn in range(1, max_turns + 1):
         speaker_user_id = speaker_order[(turn - 1) % 2]
+        # 只有 direction_target_user_id 那一侧的 Agent 拿到方向 hint;另一侧空
+        this_direction = (
+            direction_hint
+            if direction_hint and speaker_user_id == direction_target_user_id
+            else None
+        )
         try:
             data = await _ask_one_turn(
                 db,
@@ -219,6 +231,7 @@ async def run_agent_chat(
                 hooks=hooks,
                 history=messages,
                 avoid_topic_refs=avoid_topic_refs or [],
+                direction_hint=this_direction,
             )
         except Exception as e:
             print(f"[agent_chat] turn {turn} LLM failed: {e}")
@@ -282,6 +295,7 @@ async def _ask_one_turn(
     hooks: list[MatchHook],
     history: list[AgentChatMessage],
     avoid_topic_refs: list[str],
+    direction_hint: Optional[str] = None,
 ) -> dict | None:
     """跑一轮 LLM,返回 parsed 字典 or None"""
     avoid_block = ""
@@ -290,10 +304,17 @@ async def _ask_one_turn(
             avoid_refs=json.dumps(avoid_topic_refs, ensure_ascii=False)
         )
 
+    direction_block = ""
+    if direction_hint:
+        direction_block = (
+            "\n**宿主新方向指示**(刚跟你私下聊过,这场互聊请尤其往这个方向探):\n"
+            f"  > {direction_hint.strip()[:500]}\n"
+        )
+
     user_payload = TURN_PROMPT_TEMPLATE.format(
         md_profile=json.dumps(md_profile, ensure_ascii=False, indent=2),
         hooks=_format_hooks_for_speaker(hooks, speaker_user_id),
-        avoid_block=avoid_block,
+        avoid_block=avoid_block + direction_block,
         history=_format_history_for_speaker(history, speaker_user_id),
         turn_number=turn_number,
         max_turns=max_turns,

@@ -35,3 +35,6 @@ class SummaryResponse(BaseModel):
 
 class DecisionRequest(BaseModel):
     decision: Literal["open_human_chat", "re_dispatch", "drop", "chat_with_my_agent"]
+    # 仅 re_dispatch 时使用 — 宿主在「跟我 Agent 聊聊」对话里
+    # 沉淀下来的方向 hint,传给下一场 agent 互聊
+    direction_hint: Optional[str] = None

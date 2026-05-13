@@ -22,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import BackgroundTasks
+
 from src.agent_self.engine import (
     get_or_create_conversation,
     stream_and_persist,
@@ -74,6 +76,17 @@ class MessageResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+
+
+class RedispatchRequest(BaseModel):
+    """从「跟我 Agent 聊聊」对话里发起再派 — direction_hint 是宿主刚跟 Agent
+    沉淀的新方向(短文本,会注入下一场 agent 互聊的 prompt)"""
+    direction_hint: str = Field(min_length=1, max_length=500)
+
+
+class RedispatchResponse(BaseModel):
+    ok: bool
+    summary_id: int
 
 
 # ========================================
@@ -284,3 +297,59 @@ async def send_message(
             "X-Accel-Buffering": "no",  # nginx / Railway 反代不缓冲
         },
     )
+
+
+# ========================================
+# 从对话里直接触发再派(scope=room 才能用)
+# ========================================
+
+
+@router.post(
+    "/conversations/{conv_id}/redispatch",
+    response_model=RedispatchResponse,
+)
+async def trigger_redispatch_from_conversation(
+    conv_id: int,
+    payload: RedispatchRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = CurrentUser,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    在「跟我 Agent 聊聊」对话里点「用这个方向再派一次」时调用。
+    跟 /api/summary/{id}/decision (decision=re_dispatch) 区别:
+    - 这条路径**不再次写入 SummaryDecision**(那张简报已经决策过 chat_with_my_agent)
+    - 直接调用 run_redispatch_for_summary,direction_hint 注入下一场 agent 互聊的 prompt
+
+    需要 conversation.scope == 'room' 且 context_refs 里有 summary_id。
+    """
+    conv = (
+        await db.execute(
+            select(AgentConversation).where(AgentConversation.id == conv_id)
+        )
+    ).scalar_one_or_none()
+    if conv is None or conv.host_user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="会话不存在或不属于你")
+    if conv.scope != "room":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="只有「简报后调方向」对话能触发再派,这场不是",
+        )
+    refs = conv.context_refs or {}
+    summary_id = refs.get("summary_id")
+    if not summary_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="这场对话没记下简报 id,改不了再派",
+        )
+
+    from src.match.pipeline import run_redispatch_for_summary
+
+    background_tasks.add_task(
+        run_redispatch_for_summary,
+        summary_id=int(summary_id),
+        requester_user_id=current_user.id,
+        direction_hint=payload.direction_hint,
+    )
+
+    return RedispatchResponse(ok=True, summary_id=int(summary_id))

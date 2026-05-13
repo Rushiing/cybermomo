@@ -103,7 +103,11 @@ async def run_full_pipeline_for_user(user_id: int) -> None:
 # 再派一次:同 match 同 Agent 换话题
 # ========================================
 
-async def run_redispatch_for_summary(summary_id: int, requester_user_id: int) -> None:
+async def run_redispatch_for_summary(
+    summary_id: int,
+    requester_user_id: int,
+    direction_hint: str | None = None,
+) -> None:
     """
     用户在某条 summary 上点了"再派一次":
       1. 找到该 summary 关联的 agent_chat → match
@@ -111,10 +115,16 @@ async def run_redispatch_for_summary(summary_id: int, requester_user_id: int) ->
       3. 用 avoid_topic_refs(上一场聊过的 topic_ref 全集)启新一场 agent_chat
       4. 新 chat 跑完后生成新一对 summary
 
+    direction_hint:宿主在「跟我 Agent 聊聊」对话里沉淀的方向(短文本),
+    会注入 host 这一侧 Agent 的 system prompt — "本次互聊请尤其往这个方向探"。
+
     注意:并发保护 — 如果同一 match 已经有 status='running' 的 chat,直接跳过,
     避免双方同时点"再派"撞车。
     """
-    print(f"[redispatch] start summary_id={summary_id} requester={requester_user_id}")
+    print(
+        f"[redispatch] start summary_id={summary_id} requester={requester_user_id} "
+        f"direction={'<set>' if direction_hint else 'none'}"
+    )
 
     # Step 1: 拉 summary + chat + match,采集 avoid_topic_refs
     avoid_refs: list[str] = []
@@ -174,7 +184,13 @@ async def run_redispatch_for_summary(summary_id: int, requester_user_id: int) ->
             print(f"[redispatch] match {match_id} disappeared, abort")
             return
         try:
-            new_chat = await run_agent_chat(db, match=match, avoid_topic_refs=avoid_refs)
+            new_chat = await run_agent_chat(
+                db,
+                match=match,
+                avoid_topic_refs=avoid_refs,
+                direction_hint=direction_hint,
+                direction_target_user_id=requester_user_id,
+            )
             new_chat_id = new_chat.id
             match.status = "agent_chat_done" if "done" in (new_chat.status or "") else "agent_chat_running"
             await db.commit()

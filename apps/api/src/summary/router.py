@@ -385,6 +385,7 @@ async def make_decision(
             run_redispatch_for_summary,
             summary_id=s.id,
             requester_user_id=current_user.id,
+            direction_hint=payload.direction_hint,
         )
 
     # chat_with_my_agent:同步种一个 conversation,前端拿到 id 直接跳

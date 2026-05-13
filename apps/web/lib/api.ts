@@ -257,6 +257,8 @@ export interface RoomStatusResponse {
 
 export interface DecisionRequest {
   decision: "open_human_chat" | "re_dispatch" | "drop" | "chat_with_my_agent"
+  // 仅 re_dispatch 时使用 — 跟 Agent 在对话里沉淀的方向 hint
+  direction_hint?: string | null
 }
 
 export interface ChatSessionResponse {

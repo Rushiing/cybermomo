@@ -8,9 +8,11 @@
  * - 有 Topbar + 返回链接
  */
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
 import AgentConversationView from "@/components/AgentConversationView"
+import Toast from "@/components/Toast"
 import Topbar from "@/components/Topbar"
 import { api, type AgentConversation } from "@/lib/api"
 
@@ -52,11 +54,18 @@ export default function AgentConversationPage({
 }: {
   params: { id: string }
 }) {
+  const router = useRouter()
   const conversationId = Number(params.id)
 
   const [conv, setConv] = useState<AgentConversation | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  // 「用这个方向再派」modal
+  const [redispatchOpen, setRedispatchOpen] = useState(false)
+  const [direction, setDirection] = useState("")
+  const [redispatching, setRedispatching] = useState(false)
 
   useEffect(() => {
     void loadMeta()
@@ -78,6 +87,26 @@ export default function AgentConversationPage({
     }
   }
 
+  async function submitRedispatch() {
+    if (!direction.trim()) return
+    setRedispatching(true)
+    try {
+      await api.post(
+        `/api/me/agent/conversations/${conversationId}/redispatch`,
+        { direction_hint: direction.trim() },
+      )
+      setRedispatchOpen(false)
+      setDirection("")
+      setNotice("收到 — 我用这个方向去跟 TA 再聊一场,大概一分钟回房间给你新简报。")
+      // 等 1.5s 跳回 /room,让用户看到新简报陆续到来
+      setTimeout(() => router.push("/room"), 1500)
+    } catch (e: any) {
+      setNotice(`再派失败:${e?.detail || e?.message}`)
+    } finally {
+      setRedispatching(false)
+    }
+  }
+
   if (Number.isNaN(conversationId)) {
     return (
       <div className="min-h-screen">
@@ -89,9 +118,12 @@ export default function AgentConversationPage({
     )
   }
 
+  const canRedispatch = conv?.scope === "room"
+
   return (
     <div className="h-screen flex flex-col">
       <Topbar active="me" />
+      <Toast message={notice} onClose={() => setNotice(null)} />
 
       <div className="max-w-[720px] mx-auto w-full px-6 pt-4 flex-shrink-0">
         <Link href="/me/agent" className="text-xs text-ink-secondary hover:text-ink inline-flex items-center gap-1">
@@ -148,6 +180,64 @@ export default function AgentConversationPage({
           <AgentConversationView conversationId={conversationId} />
         )}
       </div>
+
+      {/* 「用这个方向再派」sticky CTA — 仅 scope=room */}
+      {canRedispatch && conv && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30">
+          <button
+            onClick={() => setRedispatchOpen(true)}
+            className="bg-primary text-white px-5 py-2.5 rounded-full font-medium text-sm shadow-modal hover:bg-primary-dark transition flex items-center gap-2"
+          >
+            <span>🔁</span>
+            <span>用这个方向再派一次</span>
+          </button>
+        </div>
+      )}
+
+      {/* Modal:确认 / 编辑方向 */}
+      {redispatchOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
+            onClick={() => !redispatching && setRedispatchOpen(false)}
+          />
+          <div className="relative bg-bg rounded-lg shadow-modal max-w-md w-full p-6">
+            <h3 className="text-base font-semibold mb-1.5">这次让我往哪儿探?</h3>
+            <p className="text-xs text-ink-tertiary mb-4 leading-relaxed">
+              一两句话说清你想 Agent 这次重点聊哪个方向。我会带着这个方向去跟
+              TA 的 Agent 再聊一场,大约一分钟带新简报回房间。
+            </p>
+            <textarea
+              value={direction}
+              onChange={e => setDirection(e.target.value)}
+              rows={4}
+              maxLength={500}
+              placeholder="比如:这次重点聊音乐演出 / 别再聊职场了 / 探探 TA 对长期关系的态度"
+              className="w-full resize-none border-[1.5px] border-line-soft rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-primary bg-bg-elevated"
+              autoFocus
+            />
+            <div className="text-[11px] text-ink-tertiary text-right mt-1">
+              {direction.length} / 500
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setRedispatchOpen(false)}
+                disabled={redispatching}
+                className="text-sm text-ink-secondary hover:text-ink px-3 py-2 transition"
+              >
+                取消
+              </button>
+              <button
+                onClick={submitRedispatch}
+                disabled={!direction.trim() || redispatching}
+                className="bg-primary text-white px-5 py-2 rounded-full text-sm font-medium hover:bg-primary-dark transition disabled:opacity-40"
+              >
+                {redispatching ? "派出去中…" : "派 Agent 去聊"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
