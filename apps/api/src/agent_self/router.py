@@ -323,8 +323,10 @@ async def trigger_redispatch_from_conversation(
     """
     在「跟我 Agent 聊聊」对话里点「用这个方向再派一次」时调用。
     跟 /api/summary/{id}/decision (decision=re_dispatch) 区别:
-    - 这条路径**不再次写入 SummaryDecision**(那张简报已经决策过 chat_with_my_agent)
+    - 这条路径**不写 SummaryDecision** — Tier 1(沉思)动作,不挡 Tier 2 真决策
     - 直接调用 run_redispatch_for_summary,direction_hint 注入下一场 agent 互聊的 prompt
+    - 但是它**实际效果跟 re_dispatch 决策一样**(产生新一场互聊 + 新简报)
+      → 实际上是从对话里直接走快路,跳过去 /room 点 re_dispatch 决策的步骤
 
     需要 conversation.scope == 'room' 且 context_refs 里有 summary_id。
     """

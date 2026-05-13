@@ -74,7 +74,7 @@ export default function RoomPage() {
   async function decide(summaryId: number, decision: DecisionRequest["decision"]) {
     setActionPending(summaryId)
     try {
-      const decisionResp = await api.post<SummaryResponse, DecisionRequest>(
+      await api.post<SummaryResponse, DecisionRequest>(
         `/api/summary/${summaryId}/decision`,
         { decision },
       )
@@ -96,18 +96,29 @@ export default function RoomPage() {
         setTimeout(() => { void loadAll() }, 30_000)
         setTimeout(() => { void loadAll() }, 75_000)
       }
-      if (decision === "chat_with_my_agent") {
-        // 后端已经种好 conversation 并返回了 agent_conversation_id,直接跳
-        const convId = decisionResp?.agent_conversation_id
-        if (convId) {
-          router.push(`/me/agent/${convId}`)
-          return
-        }
-        setNotice("Agent 已经准备好跟你聊 — 右下浮动按钮打开就是。")
-      }
       await loadAll()
     } catch (e: any) {
       setNotice(`决策失败:${e?.detail || e?.message}`)
+    } finally {
+      setActionPending(null)
+    }
+  }
+
+  // Tier 1 行为:跟 Agent 聊聊这场简报 — 跟 decision 完全解耦,不写 SummaryDecision
+  async function openAgentChat(summaryId: number) {
+    setActionPending(summaryId)
+    try {
+      const resp = await api.post<SummaryResponse>(
+        `/api/summary/${summaryId}/agent-chat`,
+      )
+      const convId = resp?.agent_conversation_id
+      if (convId) {
+        router.push(`/me/agent/${convId}`)
+      } else {
+        setNotice("Agent 暂时没空,稍后再试。")
+      }
+    } catch (e: any) {
+      setNotice(`打开失败:${e?.detail || e?.message}`)
     } finally {
       setActionPending(null)
     }
@@ -327,15 +338,6 @@ export default function RoomPage() {
                     {s.user_decision === "re_dispatch" && (
                       <span>· Agent 在换话题再聊,稍后会有新简报</span>
                     )}
-                    {s.user_decision === "chat_with_my_agent" && s.agent_conversation_id && (
-                      <Link
-                        href={`/me/agent/${s.agent_conversation_id}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-primary-dark hover:underline font-medium"
-                      >
-                        · 继续跟我 Agent 聊 →
-                      </Link>
-                    )}
                   </div>
                 )}
 
@@ -362,48 +364,62 @@ export default function RoomPage() {
                       </div>
                     )}
 
-                    {/* 看 Agent 互聊入口(铁律允许:只暴露 utterance + public_signals,对方 private 永不出现)*/}
-                    {canViewAgentChat && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setViewerSummaryId(s.id) }}
-                        className="text-xs text-ink-secondary hover:text-primary-dark border border-line-soft hover:border-primary rounded-full px-3 py-1.5 transition flex items-center gap-1.5"
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                        看看 Agent 们都聊了什么 →
-                      </button>
-                    )}
-
-                    {/* 决策按钮(只在未决策时显示) */}
-                    {!decided && (
-                      <div className="flex flex-wrap gap-2 pt-2">
-                        <ActionBtn
-                          label="开真人聊天"
-                          primary={s.recommended_action === "开真人聊天"}
-                          loading={actionPending === s.id}
-                          onClick={() => decide(s.id, "open_human_chat")}
-                        />
-                        <ActionBtn
-                          label="再派一次"
-                          primary={s.recommended_action === "再派一次"}
-                          loading={actionPending === s.id}
-                          onClick={() => decide(s.id, "re_dispatch")}
-                        />
-                        <ActionBtn
-                          label="跟我 Agent 聊聊"
-                          primary={s.recommended_action === "跟我聊聊调方向"}
-                          loading={actionPending === s.id}
-                          onClick={() => decide(s.id, "chat_with_my_agent")}
-                        />
-                        <ActionBtn
-                          label="丢"
-                          warn
-                          loading={actionPending === s.id}
-                          onClick={() => decide(s.id, "drop")}
-                        />
+                    {/* === Tier 1:和 Agent 一起想想 ─ 持续性,随时可以来 === */}
+                    <div className="pt-2">
+                      <div className="text-[11px] text-ink-tertiary tracking-[0.04em] mb-2">
+                        和 Agent 一起想想
                       </div>
-                    )}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void openAgentChat(s.id) }}
+                          disabled={actionPending === s.id}
+                          className="text-xs text-ink hover:text-primary-dark border-[1.5px] border-line-soft hover:border-primary rounded-full px-3.5 py-1.5 transition flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <span>💬</span>
+                          <span>
+                            {s.agent_conversation_id ? "继续跟我 Agent 聊" : "跟我 Agent 聊聊这场"}
+                          </span>
+                        </button>
+                        {canViewAgentChat && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setViewerSummaryId(s.id) }}
+                            className="text-xs text-ink-secondary hover:text-primary-dark border-[1.5px] border-line-soft hover:border-primary rounded-full px-3.5 py-1.5 transition flex items-center gap-1.5"
+                          >
+                            <span>👀</span>
+                            <span>看看 Agent 们都聊了什么</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                    {decided && (
+                    {/* === Tier 2:决定 ─ 一次性终局动作,选了 一个就锁住 === */}
+                    {!decided ? (
+                      <div className="pt-3 border-t border-dashed border-line-soft">
+                        <div className="text-[11px] text-ink-tertiary tracking-[0.04em] mb-2">
+                          决定
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <ActionBtn
+                            label="开真人聊天"
+                            primary={s.recommended_action === "开真人聊天"}
+                            loading={actionPending === s.id}
+                            onClick={() => decide(s.id, "open_human_chat")}
+                          />
+                          <ActionBtn
+                            label="再派一次"
+                            primary={s.recommended_action === "再派一次"}
+                            loading={actionPending === s.id}
+                            onClick={() => decide(s.id, "re_dispatch")}
+                          />
+                          <ActionBtn
+                            label="丢"
+                            warn
+                            loading={actionPending === s.id}
+                            onClick={() => decide(s.id, "drop")}
+                          />
+                        </div>
+                      </div>
+                    ) : (
                       <div className="text-xs text-ink-tertiary pt-2 border-t border-dashed border-line-soft flex items-center gap-2 flex-wrap">
                         <span>已决策:<strong className="text-ink">{decisionLabel(s.user_decision!)}</strong></span>
                         {s.decided_at && <span>· {new Date(s.decided_at).toLocaleString("zh-CN")}</span>}
@@ -414,15 +430,6 @@ export default function RoomPage() {
                             className="ml-auto text-primary-dark hover:underline font-medium"
                           >
                             进入这场聊天 →
-                          </Link>
-                        )}
-                        {s.user_decision === "chat_with_my_agent" && s.agent_conversation_id && (
-                          <Link
-                            href={`/me/agent/${s.agent_conversation_id}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="ml-auto text-primary-dark hover:underline font-medium"
-                          >
-                            继续跟我 Agent 聊 →
                           </Link>
                         )}
                       </div>
@@ -452,6 +459,8 @@ function decisionLabel(d: string): string {
     open_human_chat: "开真人聊天",
     re_dispatch: "再派一次",
     drop: "丢",
+    // chat_with_my_agent 是历史值(从 decision 退役),只在迁移前的老数据上出现;
+    // 迁移会删掉这些行,但留个 label 兜底
     chat_with_my_agent: "跟我 Agent 聊聊",
   }
   return map[d] || d

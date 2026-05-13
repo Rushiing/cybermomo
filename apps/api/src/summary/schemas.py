@@ -28,13 +28,15 @@ class SummaryResponse(BaseModel):
     # human_chat_observation:来自 chat_session
     peer_user_id: Optional[int] = None
     peer_nickname: Optional[str] = None
-    # 只有 POST /decision 接口在 decision='chat_with_my_agent' 时返回
-    # 用于前端跳转 /me/agent/{conv_id}
+    # 该简报关联的「跟我 Agent 聊聊」对话 id(没有的话是 null)
+    # 跟「decision」无关 — 任何时候卡片上「跟我 Agent 聊聊」按钮都用它跳
     agent_conversation_id: Optional[int] = None
 
 
 class DecisionRequest(BaseModel):
-    decision: Literal["open_human_chat", "re_dispatch", "drop", "chat_with_my_agent"]
-    # 仅 re_dispatch 时使用 — 宿主在「跟我 Agent 聊聊」对话里
-    # 沉淀下来的方向 hint,传给下一场 agent 互聊
+    # 注:chat_with_my_agent 已不再是 decision(它是持续性"沉思"行为,
+    # 单独走 POST /api/summary/{id}/agent-chat)
+    decision: Literal["open_human_chat", "re_dispatch", "drop"]
+    # 仅 re_dispatch 时使用 — 宿主在 Agent 对话里沉淀的方向 hint,
+    # 传给下一场 agent 互聊
     direction_hint: Optional[str] = None

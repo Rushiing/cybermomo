@@ -368,11 +368,14 @@ async def make_decision(
     db: AsyncSession = Depends(get_session),
 ):
     """
-    用户在简报卡上的决策。
+    用户在简报卡上做的**终局决策**(三选一,选了就锁)。
     - open_human_chat:开真人聊天(等对方也决策)
     - re_dispatch:同 Agent 换话题再派一次(后台 pipeline 跑新一场)
     - drop:丢(软拉黑该用户)
-    - chat_with_my_agent:跟自己 Agent 调方向(MVP:仅记录)
+
+    注:「跟我 Agent 聊聊」不是 decision — 它是持续性沉思行为,走单独的
+    POST /api/summary/{id}/agent-chat,不会写 summary_decisions 也不会
+    block 后续真决策。
 
     drop 会自动加软拉黑,wildcard 后续会排除。
     re_dispatch 会触发后台任务:同 match 同 Agent 换话题再聊一场,跑完生成新简报。
@@ -450,22 +453,67 @@ async def make_decision(
             direction_hint=payload.direction_hint,
         )
 
-    # chat_with_my_agent:同步种一个 conversation,前端拿到 id 直接跳
-    conv_id: Optional[int] = None
-    if payload.decision == "chat_with_my_agent":
-        from src.agent_self.revisit import seed_room_decision_conversation
-
-        conv_id = await seed_room_decision_conversation(
-            db, host_user_id=current_user.id, summary_id=s.id
-        )
-
     peer_info = await _load_peer_info_for_summaries(
         db, [s], host_user_id=current_user.id
     )
     peer_uid, peer_nick = peer_info.get(s.id, (None, None))
-    resp = _to_response(
-        s, decision, peer_user_id=peer_uid, peer_nickname=peer_nick
+    room_conv_ids = await _load_room_conv_ids_for_summaries(
+        db, [s.id], host_user_id=current_user.id
     )
-    if conv_id is not None:
-        resp.agent_conversation_id = conv_id
-    return resp
+    return _to_response(
+        s,
+        decision,
+        peer_user_id=peer_uid,
+        peer_nickname=peer_nick,
+        agent_conversation_id=room_conv_ids.get(s.id),
+    )
+
+
+@router.post("/{summary_id}/agent-chat", response_model=SummaryResponse)
+async def open_or_get_agent_chat(
+    summary_id: int,
+    current_user: User = CurrentUser,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    开/进「跟我 Agent 聊聊」对话 — get-or-create,**不写 SummaryDecision**。
+
+    这跟 decision 不是一回事:这条简报后续依然可以做真决策(open_human_chat
+    / re_dispatch / drop),不会被 lock。
+
+    返回 SummaryResponse + agent_conversation_id,前端直接 router.push
+    到 /me/agent/{id}。
+    """
+    s = (await db.execute(
+        select(Summary).where(
+            Summary.id == summary_id,
+            Summary.host_user_id == current_user.id,
+        )
+    )).scalar_one_or_none()
+    if s is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="简报不存在或不属于你")
+
+    from src.agent_self.revisit import seed_room_decision_conversation
+
+    conv_id = await seed_room_decision_conversation(
+        db, host_user_id=current_user.id, summary_id=s.id
+    )
+
+    # 同时把 decision / peer info 一并塞回(前端可能用它刷新 state)
+    decision = (await db.execute(
+        select(SummaryDecision).where(
+            SummaryDecision.summary_id == s.id,
+            SummaryDecision.user_id == current_user.id,
+        )
+    )).scalar_one_or_none()
+    peer_info = await _load_peer_info_for_summaries(
+        db, [s], host_user_id=current_user.id
+    )
+    peer_uid, peer_nick = peer_info.get(s.id, (None, None))
+    return _to_response(
+        s,
+        decision,
+        peer_user_id=peer_uid,
+        peer_nickname=peer_nick,
+        agent_conversation_id=conv_id,
+    )
