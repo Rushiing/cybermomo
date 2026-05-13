@@ -327,6 +327,15 @@ export default function RoomPage() {
                     {s.user_decision === "re_dispatch" && (
                       <span>· Agent 在换话题再聊,稍后会有新简报</span>
                     )}
+                    {s.user_decision === "chat_with_my_agent" && s.agent_conversation_id && (
+                      <Link
+                        href={`/me/agent/${s.agent_conversation_id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-primary-dark hover:underline font-medium"
+                      >
+                        · 继续跟我 Agent 聊 →
+                      </Link>
+                    )}
                   </div>
                 )}
 
@@ -405,6 +414,15 @@ export default function RoomPage() {
                             className="ml-auto text-primary-dark hover:underline font-medium"
                           >
                             进入这场聊天 →
+                          </Link>
+                        )}
+                        {s.user_decision === "chat_with_my_agent" && s.agent_conversation_id && (
+                          <Link
+                            href={`/me/agent/${s.agent_conversation_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="ml-auto text-primary-dark hover:underline font-medium"
+                          >
+                            继续跟我 Agent 聊 →
                           </Link>
                         )}
                       </div>

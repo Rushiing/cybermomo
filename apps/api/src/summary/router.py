@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat, AgentChatMessage
+from src.agent_self.models import AgentConversation
 from src.auth.deps import CurrentUser
 from src.auth.models import User, UserProfile
 from src.human_chat.models import ChatSession
@@ -33,6 +34,7 @@ def _to_response(
     *,
     peer_user_id: Optional[int] = None,
     peer_nickname: Optional[str] = None,
+    agent_conversation_id: Optional[int] = None,
 ) -> SummaryResponse:
     return SummaryResponse(
         id=s.id,
@@ -50,7 +52,51 @@ def _to_response(
         decided_at=decision.decided_at if decision else None,
         peer_user_id=peer_user_id,
         peer_nickname=peer_nickname,
+        agent_conversation_id=agent_conversation_id,
     )
+
+
+async def _load_room_conv_ids_for_summaries(
+    db: AsyncSession,
+    summary_ids: list[int],
+    *,
+    host_user_id: int,
+) -> dict[int, int]:
+    """
+    一次性查每张 summary 关联的 scope='room' AgentConversation id(若存在)。
+    返回 {summary_id: conv_id} — 没有的 summary 不在 dict 里。
+
+    用 PG JSONB 操作符 context_refs->>'summary_id' = '{id}' 过滤,id IN 批量 fetch。
+    """
+    if not summary_ids:
+        return {}
+    summary_id_strs = [str(sid) for sid in summary_ids]
+    rows = (
+        await db.execute(
+            select(
+                AgentConversation.id,
+                AgentConversation.context_refs,
+            ).where(
+                AgentConversation.host_user_id == host_user_id,
+                AgentConversation.scope == "room",
+                AgentConversation.context_refs.op("->>")("summary_id").in_(summary_id_strs),
+            )
+        )
+    ).all()
+    out: dict[int, int] = {}
+    for r in rows:
+        refs = r.context_refs or {}
+        sid_str = refs.get("summary_id")
+        if sid_str is None:
+            continue
+        try:
+            sid = int(sid_str)
+        except (TypeError, ValueError):
+            continue
+        # 若同一 summary 有多个 conv(理论不该 — seed 函数幂等),保最早那个
+        if sid not in out:
+            out[sid] = r.id
+    return out
 
 
 async def _load_peer_info_for_summaries(
@@ -168,12 +214,19 @@ async def list_my_summaries(
         db, rows_sorted, host_user_id=current_user.id
     )
 
+    # 一次性拉所有 summary 关联的 room conversation id(让已决策的
+    # chat_with_my_agent 卡能展示"继续跟我 Agent 聊"link)
+    room_conv_ids = await _load_room_conv_ids_for_summaries(
+        db, summary_ids, host_user_id=current_user.id
+    )
+
     return [
         _to_response(
             s,
             decision_by_summary.get(s.id),
             peer_user_id=peer_info.get(s.id, (None, None))[0],
             peer_nickname=peer_info.get(s.id, (None, None))[1],
+            agent_conversation_id=room_conv_ids.get(s.id),
         )
         for s in rows_sorted
     ]
@@ -206,7 +259,16 @@ async def get_summary(
         db, [s], host_user_id=current_user.id
     )
     peer_uid, peer_nick = peer_info.get(s.id, (None, None))
-    return _to_response(s, decision, peer_user_id=peer_uid, peer_nickname=peer_nick)
+    room_conv_ids = await _load_room_conv_ids_for_summaries(
+        db, [s.id], host_user_id=current_user.id
+    )
+    return _to_response(
+        s,
+        decision,
+        peer_user_id=peer_uid,
+        peer_nickname=peer_nick,
+        agent_conversation_id=room_conv_ids.get(s.id),
+    )
 
 
 # ========================================
