@@ -158,7 +158,7 @@ export default function AgentConversationPage({
           const { peerName, state } = getConversationAnchor(conv)
           const avatarChar = (peerName || "?").charAt(0)
           return (
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex items-start gap-3">
               {peerName && (
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
                   {avatarChar}
@@ -187,6 +187,16 @@ export default function AgentConversationPage({
                   这场对话是关于 {peerName ? `@${peerName}` : "对方"} 的。
                 </p>
               </div>
+              {/* 右上 CTA · scope=room 才有 · 跟标题在同一行,不再浮动 */}
+              {canRedispatch && (
+                <button
+                  onClick={openRedispatch}
+                  className="text-xs text-primary-dark border-[1.5px] border-primary hover:bg-primary-soft rounded-full px-3 py-1.5 transition flex items-center gap-1.5 flex-shrink-0 font-medium"
+                >
+                  <span>🔁</span>
+                  <span>用这个方向再派</span>
+                </button>
+              )}
             </div>
           )
         })()}
@@ -205,19 +215,6 @@ export default function AgentConversationPage({
           <AgentConversationView conversationId={conversationId} />
         )}
       </div>
-
-      {/* 「用这个方向再派」sticky CTA — 仅 scope=room */}
-      {canRedispatch && conv && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30">
-          <button
-            onClick={openRedispatch}
-            className="bg-primary text-white px-5 py-2.5 rounded-full font-medium text-sm shadow-modal hover:bg-primary-dark transition flex items-center gap-2"
-          >
-            <span>🔁</span>
-            <span>用这个方向再派一次</span>
-          </button>
-        </div>
-      )}
 
       {/* Modal:Agent 已提炼方向时直接确认;没提炼到才让用户手敲 */}
       {redispatchOpen && (
