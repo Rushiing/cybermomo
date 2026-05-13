@@ -186,7 +186,8 @@ export const api = {
 
 export interface UserMeResponse {
   id: number
-  email: string
+  email?: string | null
+  username?: string | null
   google_name?: string | null
   is_adult_confirmed: boolean
   onboarded_at?: string | null
@@ -208,6 +209,18 @@ export interface UpsertProfileRequest {
     mbti?: string | null
     avatar_url?: string | null
   }
+}
+
+export interface RegisterRequest {
+  username: string  // 3-20,字母数字下划线
+  password: string  // 8-100
+  email?: string | null
+  nickname?: string | null
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
 }
 
 export interface CreateMdRequest {

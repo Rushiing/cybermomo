@@ -21,6 +21,8 @@ const DISABLED_PATH_PREFIXES = [
   "/md/basic",
   "/md/review",
   "/md/generating",
+  "/signup",
+  "/signin",
 ]
 
 function isDisabledPath(pathname: string | null): boolean {

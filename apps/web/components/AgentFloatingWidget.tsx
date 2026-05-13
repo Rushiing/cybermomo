@@ -28,6 +28,8 @@ const HIDE_PATH_PREFIXES = [
   "/md/review",
   "/md/generating",
   "/changelog",
+  "/signup",
+  "/signin",
 ]
 
 function isHidden(pathname: string | null): boolean {

@@ -64,6 +64,17 @@ export default function LoginScreen() {
         用 Google 登录
       </a>
 
+      {/* 用户名密码注册/登录 入口(跟 Google 平级 — 不用 Gmail 的也能玩) */}
+      <div className="mt-5 flex items-center gap-3 text-[13px] text-ink-secondary">
+        <a href="/signup" className="hover:text-ink underline-offset-2 hover:underline">
+          用用户名注册
+        </a>
+        <span className="text-ink-tertiary">·</span>
+        <a href="/signin" className="hover:text-ink underline-offset-2 hover:underline">
+          已有账号,登录
+        </a>
+      </div>
+
       {showDev && (
         <div className="mt-6 text-center">
           <p className="text-xs text-ink-tertiary mb-3">开发模式 · 跳过 OAuth 直接走流程</p>
