@@ -89,6 +89,11 @@ class RedispatchResponse(BaseModel):
     summary_id: int
 
 
+class ExtractDirectionResponse(BaseModel):
+    """从对话历史里 LLM 提炼出的方向 hint;不明确时返 null"""
+    suggested_direction: Optional[str] = None
+
+
 # ========================================
 # 会话:新建 / 列表 / 详情
 # ========================================
@@ -353,3 +358,90 @@ async def trigger_redispatch_from_conversation(
     )
 
     return RedispatchResponse(ok=True, summary_id=int(summary_id))
+
+
+@router.post(
+    "/conversations/{conv_id}/extract-direction",
+    response_model=ExtractDirectionResponse,
+)
+async def extract_direction(
+    conv_id: int,
+    current_user: User = CurrentUser,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    从「跟我 Agent 聊聊」对话历史里提炼宿主给 Agent 的"再去聊"方向。
+    给前端「用这个方向再派一次」按钮预填用 — Agent 已经明确给方向时,
+    用户不用再手敲一遍。
+
+    返回:
+    - suggested_direction: 提炼到的方向(1-2 句话)
+    - None: 对话还没明确方向 / 提炼失败 → 前端 fallback 空 textarea
+    """
+    from src.llm.gateway import llm_chat
+    from src.llm.types import Message
+
+    conv = (
+        await db.execute(
+            select(AgentConversation).where(AgentConversation.id == conv_id)
+        )
+    ).scalar_one_or_none()
+    if conv is None or conv.host_user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+
+    # 拉最近 10 条消息(够覆盖 Agent 给方向的上下文)
+    msgs = (
+        await db.execute(
+            select(AgentConversationMessage)
+            .where(AgentConversationMessage.conversation_id == conv_id)
+            .order_by(desc(AgentConversationMessage.turn))
+            .limit(10)
+        )
+    ).scalars().all()
+    msgs = list(reversed(msgs))
+    if len(msgs) < 2:
+        # 才打开就来提炼 — 没素材,直接返 None
+        return ExtractDirectionResponse(suggested_direction=None)
+
+    convo_text = "\n\n".join(
+        f"[{m.role}] {m.content}" for m in msgs if m.role in ("user", "assistant")
+    )
+
+    system_prompt = (
+        "你是对话摘要器。下面是一段宿主跟自己 Agent 的对话。"
+        "宿主可能给 Agent 下了「再去跟 TA 聊」的指令,并明确了想探的方向。"
+        "你的任务:用一两句话提炼出**宿主指示的探索方向**。"
+        "\n\n规则:"
+        "\n- 只返回方向文本本身(可包含 markdown 加粗 / 列点)"
+        "\n- 不加引号、不加前缀(不要写'方向是:'、'好,'、'建议:')"
+        "\n- 字数 50-200 字"
+        "\n- 如果对话**还没明确方向**(宿主在跟 Agent 推敲、还没下指令),"
+        "返回字面 NONE(全大写)"
+    )
+    user_payload = f"对话片段(从早到晚):\n\n{convo_text}\n\n现在请提炼宿主的探索方向。"
+
+    try:
+        resp = await llm_chat(
+            role="host_agent",
+            messages=[Message(role="user", content=user_payload)],
+            system=system_prompt,
+            max_tokens=400,
+            temperature=0.2,
+            db=db,
+            user_id=current_user.id,
+            related_table="agent_conversations",
+            related_id=conv_id,
+        )
+    except Exception as e:
+        print(f"[extract_direction] LLM failed conv={conv_id}: {e}")
+        return ExtractDirectionResponse(suggested_direction=None)
+
+    text = (resp.text or "").strip()
+    # Strip markdown bold around the whole answer if model wrapped it
+    if text.startswith("**") and text.endswith("**"):
+        text = text[2:-2].strip()
+    # 模型返 NONE / 空 / 太短 → 视为未明确
+    if not text or text == "NONE" or text.lower() == "none" or len(text) < 10:
+        return ExtractDirectionResponse(suggested_direction=None)
+    # 截 500(跟 redispatch 接口的 max_length 对齐)
+    return ExtractDirectionResponse(suggested_direction=text[:500])

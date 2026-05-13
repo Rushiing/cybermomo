@@ -66,6 +66,9 @@ export default function AgentConversationPage({
   const [redispatchOpen, setRedispatchOpen] = useState(false)
   const [direction, setDirection] = useState("")
   const [redispatching, setRedispatching] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  // Agent 明确给过方向(提炼到了)→ 标志位让 UI 显示"直接派"模式
+  const [autoFilled, setAutoFilled] = useState(false)
 
   useEffect(() => {
     void loadMeta()
@@ -87,6 +90,27 @@ export default function AgentConversationPage({
     }
   }
 
+  async function openRedispatch() {
+    // 立刻开 modal,后台并行提炼方向
+    setRedispatchOpen(true)
+    setDirection("")
+    setAutoFilled(false)
+    setExtracting(true)
+    try {
+      const r = await api.post<{ suggested_direction: string | null }>(
+        `/api/me/agent/conversations/${conversationId}/extract-direction`,
+      )
+      if (r.suggested_direction && r.suggested_direction.trim()) {
+        setDirection(r.suggested_direction.trim())
+        setAutoFilled(true)
+      }
+    } catch {
+      /* 提炼失败也没关系 — fallback 到空 textarea */
+    } finally {
+      setExtracting(false)
+    }
+  }
+
   async function submitRedispatch() {
     if (!direction.trim()) return
     setRedispatching(true)
@@ -97,6 +121,7 @@ export default function AgentConversationPage({
       )
       setRedispatchOpen(false)
       setDirection("")
+      setAutoFilled(false)
       setNotice("收到 — 我用这个方向去跟 TA 再聊一场,大概一分钟回房间给你新简报。")
       // 等 1.5s 跳回 /room,让用户看到新简报陆续到来
       setTimeout(() => router.push("/room"), 1500)
@@ -185,7 +210,7 @@ export default function AgentConversationPage({
       {canRedispatch && conv && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30">
           <button
-            onClick={() => setRedispatchOpen(true)}
+            onClick={openRedispatch}
             className="bg-primary text-white px-5 py-2.5 rounded-full font-medium text-sm shadow-modal hover:bg-primary-dark transition flex items-center gap-2"
           >
             <span>🔁</span>
@@ -194,7 +219,7 @@ export default function AgentConversationPage({
         </div>
       )}
 
-      {/* Modal:确认 / 编辑方向 */}
+      {/* Modal:Agent 已提炼方向时直接确认;没提炼到才让用户手敲 */}
       {redispatchOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
@@ -202,23 +227,62 @@ export default function AgentConversationPage({
             onClick={() => !redispatching && setRedispatchOpen(false)}
           />
           <div className="relative bg-bg rounded-lg shadow-modal max-w-md w-full p-6">
-            <h3 className="text-base font-semibold mb-1.5">这次让我往哪儿探?</h3>
-            <p className="text-xs text-ink-tertiary mb-4 leading-relaxed">
-              一两句话说清你想 Agent 这次重点聊哪个方向。我会带着这个方向去跟
-              TA 的 Agent 再聊一场,大约一分钟带新简报回房间。
-            </p>
-            <textarea
-              value={direction}
-              onChange={e => setDirection(e.target.value)}
-              rows={4}
-              maxLength={500}
-              placeholder="比如:这次重点聊音乐演出 / 别再聊职场了 / 探探 TA 对长期关系的态度"
-              className="w-full resize-none border-[1.5px] border-line-soft rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-primary bg-bg-elevated"
-              autoFocus
-            />
-            <div className="text-[11px] text-ink-tertiary text-right mt-1">
-              {direction.length} / 500
-            </div>
+            {extracting ? (
+              <>
+                <h3 className="text-base font-semibold mb-1.5">这次让我往哪儿探?</h3>
+                <p className="text-xs text-ink-tertiary mb-4 leading-relaxed">
+                  正在让 Agent 从刚才的对话里提炼方向…
+                </p>
+                <div className="bg-bg-soft rounded-md px-3 py-6 text-center text-sm text-ink-tertiary animate-pulse">
+                  ⌛ 提炼中…
+                </div>
+              </>
+            ) : autoFilled ? (
+              <>
+                <h3 className="text-base font-semibold mb-1.5">就这个方向去派 Agent?</h3>
+                <p className="text-xs text-ink-tertiary mb-3 leading-relaxed">
+                  我从你刚才跟 Agent 的对话里提炼出来:
+                </p>
+                <div className="bg-primary-soft border-l-[3px] border-primary rounded-md px-3.5 py-3 text-[14px] text-ink leading-relaxed whitespace-pre-wrap mb-2">
+                  {direction}
+                </div>
+                <details className="mt-2">
+                  <summary className="text-[11.5px] text-ink-tertiary hover:text-ink-secondary cursor-pointer">
+                    需要改一下?展开编辑
+                  </summary>
+                  <textarea
+                    value={direction}
+                    onChange={e => setDirection(e.target.value)}
+                    rows={5}
+                    maxLength={500}
+                    className="mt-2 w-full resize-none border-[1.5px] border-line-soft rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-primary bg-bg-elevated"
+                  />
+                  <div className="text-[11px] text-ink-tertiary text-right mt-1">
+                    {direction.length} / 500
+                  </div>
+                </details>
+              </>
+            ) : (
+              <>
+                <h3 className="text-base font-semibold mb-1.5">这次让我往哪儿探?</h3>
+                <p className="text-xs text-ink-tertiary mb-4 leading-relaxed">
+                  你刚跟 Agent 的对话里还没提到明确方向 — 一两句话告诉我重点聊哪个方向,
+                  我去跟 TA 的 Agent 再聊一场。
+                </p>
+                <textarea
+                  value={direction}
+                  onChange={e => setDirection(e.target.value)}
+                  rows={4}
+                  maxLength={500}
+                  placeholder="比如:这次重点聊音乐演出 / 别再聊职场了 / 探探 TA 对长期关系的态度"
+                  className="w-full resize-none border-[1.5px] border-line-soft rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-primary bg-bg-elevated"
+                  autoFocus
+                />
+                <div className="text-[11px] text-ink-tertiary text-right mt-1">
+                  {direction.length} / 500
+                </div>
+              </>
+            )}
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
                 onClick={() => setRedispatchOpen(false)}
@@ -229,10 +293,10 @@ export default function AgentConversationPage({
               </button>
               <button
                 onClick={submitRedispatch}
-                disabled={!direction.trim() || redispatching}
+                disabled={!direction.trim() || redispatching || extracting}
                 className="bg-primary text-white px-5 py-2 rounded-full text-sm font-medium hover:bg-primary-dark transition disabled:opacity-40"
               >
-                {redispatching ? "派出去中…" : "派 Agent 去聊"}
+                {redispatching ? "派出去中…" : autoFilled ? "就这个,派 →" : "派 Agent 去聊"}
               </button>
             </div>
           </div>
