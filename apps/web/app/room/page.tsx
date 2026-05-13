@@ -269,28 +269,38 @@ export default function RoomPage() {
                   setExpandedId(expanded ? null : s.id)
                 }}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="w-2 h-2 rounded-full bg-primary" />
-                    <span className="text-xs text-ink-secondary">
-                      你的 Agent
-                      {(s.peer_nickname || s.peer_user_id) && (
-                        <span className="text-ink-tertiary"> · 关于 </span>
-                      )}
-                      {(s.peer_nickname || s.peer_user_id) && (
-                        <strong className="text-ink-secondary font-medium">
-                          @{s.peer_nickname || `user_${s.peer_user_id}`}
-                        </strong>
-                      )}
-                      {isPreBriefing && <span className="ml-2 text-[10px] bg-primary-soft text-primary-dark rounded-full px-2 py-0.5">真人聊前简报</span>}
-                      {isObservation && <span className="ml-2 text-[10px] bg-[rgba(255,215,0,0.18)] text-[#B8860B] rounded-full px-2 py-0.5">观察报告</span>}
-                    </span>
+                {/* === IA 第一梯队:对方 nickname + 当前状态(verdict)+ 头像 === */}
+                <div className="flex items-start gap-3.5">
+                  {(s.peer_nickname || s.peer_user_id) ? (
+                    <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
+                      {(s.peer_nickname || `U${s.peer_user_id}`).charAt(0)}
+                    </div>
+                  ) : (
+                    <div className="w-11 h-11 rounded-full bg-bg-soft text-ink-tertiary text-sm flex items-center justify-center flex-shrink-0">
+                      ?
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-[16px] font-semibold truncate">
+                        {(s.peer_nickname || s.peer_user_id)
+                          ? `@${s.peer_nickname || `user_${s.peer_user_id}`}`
+                          : "（未知对方）"}
+                      </h3>
+                      <span className={`text-[13px] font-semibold tracking-tight px-2 py-0.5 rounded-md ${
+                        s.verdict === "来电" ? "bg-primary-soft text-primary-dark"
+                        : s.verdict === "不合" ? "bg-bg-soft text-ink-tertiary"
+                        : "bg-[rgba(255,215,0,0.18)] text-[#9a7800]"
+                      }`}>
+                        {s.verdict}
+                      </span>
+                      {isPreBriefing && <span className="text-[10px] bg-primary-soft text-primary-dark rounded-full px-2 py-0.5">真人聊前简报</span>}
+                      {isObservation && <span className="text-[10px] bg-[rgba(255,215,0,0.18)] text-[#B8860B] rounded-full px-2 py-0.5">观察报告</span>}
+                    </div>
+                    <div className="text-[11px] text-ink-tertiary mt-0.5">
+                      你的 Agent · {new Date(s.created_at).toLocaleString("zh-CN")}
+                    </div>
                   </div>
-                  <div className="text-xs text-ink-tertiary">{new Date(s.created_at).toLocaleString("zh-CN")}</div>
-                </div>
-
-                <div className="flex items-baseline gap-3.5 mt-2">
-                  <div className={`text-[22px] font-semibold tracking-tight ${verdictColor(s.verdict)}`}>{s.verdict}</div>
                 </div>
 
                 {!expanded && s.highlights[0] && (

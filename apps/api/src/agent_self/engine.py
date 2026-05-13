@@ -33,6 +33,7 @@ from src.agent_self.rag import retrieve_context
 from src.llm.gateway import _get_client, _model_for_role, llm_embed
 from src.llm.models import LlmCallLog
 from src.md.models import MdDocument
+from src.shared.db import SessionLocal
 
 
 # ========================================

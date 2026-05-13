@@ -19,8 +19,27 @@ import { api, type AgentConversation } from "@/lib/api"
 const SCOPE_LABEL: Record<string, { label: string; className: string }> = {
   general: { label: "随便聊", className: "bg-bg-soft text-ink-secondary" },
   room:    { label: "简报后调方向", className: "bg-primary-soft text-primary-dark" },
-  revisit: { label: "Agent 回访", className: "bg-[rgba(255,215,0,0.18)] text-[#9a7800]" },
+  revisit: { label: "聊后回访", className: "bg-[rgba(255,215,0,0.18)] text-[#9a7800]" },
   plaza:   { label: "广场探问", className: "bg-bg-soft text-ink-secondary" },
+}
+
+function getPeerName(c: AgentConversation): string | null {
+  const refs = c.context_refs || {}
+  return refs.peer_nickname || (refs.peer_user_id ? `user_${refs.peer_user_id}` : null)
+}
+
+function getState(c: AgentConversation): string | null {
+  const refs = c.context_refs || {}
+  if (c.scope === "room") return refs.verdict || null
+  if (c.scope === "revisit") {
+    return ({
+      quit: "聊完",
+      silent: "没下文",
+      block: "已拉黑",
+      report: "已举报",
+    } as Record<string, string>)[refs.exit_action] || "聊后回访"
+  }
+  return null
 }
 
 export default function MyAgentConversationsPage() {
@@ -108,32 +127,55 @@ export default function MyAgentConversationsPage() {
           {items.map(c => {
             const scope = SCOPE_LABEL[c.scope] || SCOPE_LABEL.general
             const when = c.last_message_at || c.created_at
+            const peerName = getPeerName(c)
+            const state = getState(c)
+            const stateClass = state === "来电" ? "bg-primary-soft text-primary-dark"
+              : state === "不合" ? "bg-bg-soft text-ink-tertiary"
+              : state === "已拉黑" || state === "已举报" ? "bg-warn-soft text-warn"
+              : "bg-[rgba(255,215,0,0.18)] text-[#9a7800]"
+            const avatarChar = (peerName || "?").charAt(0)
             return (
               <Link
                 key={c.id}
                 href={`/me/agent/${c.id}`}
                 className="block bg-bg-elevated border border-line-soft hover:border-line rounded-md px-4 py-3 transition"
               >
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  {peerName ? (
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-xs font-semibold flex items-center justify-center flex-shrink-0">
+                      {avatarChar}
+                    </div>
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-bg-soft text-ink-secondary text-xs flex items-center justify-center flex-shrink-0">
+                      ?
+                    </div>
+                  )}
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      {peerName ? (
+                        <span className="text-[14.5px] font-semibold truncate">@{peerName}</span>
+                      ) : (
+                        <span className="text-[14.5px] font-medium text-ink-secondary truncate">{c.title || "跟你的 Agent"}</span>
+                      )}
+                      {state && (
+                        <span className={`text-[10px] rounded-full px-2 py-0.5 ${stateClass}`}>
+                          {state}
+                        </span>
+                      )}
                       <span className={`text-[10px] rounded-full px-2 py-0.5 ${scope.className}`}>
                         {scope.label}
                       </span>
-                      {c.title && (
-                        <span className="text-sm font-medium truncate">{c.title}</span>
-                      )}
                     </div>
                     {c.last_message_preview && (
                       <p className="text-sm text-ink-secondary leading-relaxed line-clamp-2">
                         {c.last_message_preview}
                       </p>
                     )}
-                    <div className="text-xs text-ink-tertiary mt-1.5">
+                    <div className="text-xs text-ink-tertiary mt-1">
                       {new Date(when).toLocaleString("zh-CN")}
                     </div>
                   </div>
-                  <span className="text-xs text-primary-dark font-medium flex-shrink-0">进入 →</span>
+                  <span className="text-xs text-primary-dark font-medium flex-shrink-0 mt-1">进入 →</span>
                 </div>
               </Link>
             )

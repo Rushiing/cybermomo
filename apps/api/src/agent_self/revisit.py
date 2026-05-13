@@ -163,6 +163,7 @@ async def seed_room_decision_conversation(
     返回 conv_id 让前端跳转。
 
     幂等:同一 (host, summary) 已种过 conversation 时返回现有 id。
+    title / context_refs 锚定在对方 nickname 上(IA 改:第一梯队是 peer)。
     """
     try:
         summary = (
@@ -191,19 +192,57 @@ async def seed_room_decision_conversation(
         if existing is not None:
             return existing.id
 
+        # 拉对方 user + nickname(顺 agent_chat → match → user_profiles)
+        peer_user_id: Optional[int] = None
+        peer_nickname: Optional[str] = None
+        if summary.agent_chat_id is not None:
+            from src.agent_chat.models import AgentChat
+            from src.auth.models import UserProfile
+            from src.match.models import Match
+
+            row = (
+                await db.execute(
+                    select(Match.user_a_id, Match.user_b_id)
+                    .join(AgentChat, AgentChat.match_id == Match.id)
+                    .where(AgentChat.id == summary.agent_chat_id)
+                )
+            ).first()
+            if row is not None:
+                peer_user_id = (
+                    row.user_b_id if row.user_a_id == host_user_id else row.user_a_id
+                )
+                nick_row = (
+                    await db.execute(
+                        select(UserProfile.nickname).where(
+                            UserProfile.user_id == peer_user_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                peer_nickname = nick_row
+
+        display_peer = peer_nickname or (
+            f"user_{peer_user_id}" if peer_user_id else "对方"
+        )
+        # 第一梯队 IA:title 锚 nickname,verdict 是状态副信息
+        title = f"和 @{display_peer} · {summary.verdict}"
+
         conv = await get_or_create_conversation(
             db,
             host_user_id=host_user_id,
             conversation_id=None,
             scope="room",
-            title=f"跟我聊 — 《{summary.verdict}》那张",
+            title=title,
             context_refs={
                 "summary_id": summary_id,
                 "agent_chat_id": summary.agent_chat_id,
                 "verdict": summary.verdict,
+                "peer_user_id": peer_user_id,
+                "peer_nickname": peer_nickname,
             },
         )
-        opener = room_decision_opener(verdict=summary.verdict)
+        opener = room_decision_opener(
+            verdict=summary.verdict, peer_nickname=peer_nickname
+        )
         msg = await persist_assistant_message(
             db, conversation=conv, content=opener
         )

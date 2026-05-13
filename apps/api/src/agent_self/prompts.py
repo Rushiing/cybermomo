@@ -126,7 +126,11 @@ REVISIT_OPENERS: dict[str, str] = {
     "report": "你举报了 @{peer} — 想聊聊发生了什么吗?平台那边我也会跟进。",
 }
 
-ROOM_DECISION_OPENER = (
+ROOM_DECISION_OPENER_WITH_PEER = (
+    "你刚在 @{peer} 那张《{verdict}》的简报上点了「跟我聊聊」 — 想聊哪个方向?\n"
+    "我对那场跟 TA 的互聊还有印象,可以重新捋一下。"
+)
+ROOM_DECISION_OPENER_NO_PEER = (
     "你刚在那张《{verdict}》的简报上点了「跟我聊聊」 — 想聊哪个方向?\n"
     "我对那场互聊还有印象,可以重新捋一下。"
 )
@@ -139,6 +143,10 @@ def revisit_opener(*, exit_action: str, peer_nickname: Optional[str], peer_user_
     return tpl.format(peer=peer)
 
 
-def room_decision_opener(*, verdict: str) -> str:
+def room_decision_opener(
+    *, verdict: str, peer_nickname: Optional[str] = None
+) -> str:
     """简报上点「跟我 Agent 聊聊」时 Agent 的第一句话"""
-    return ROOM_DECISION_OPENER.format(verdict=verdict)
+    if peer_nickname:
+        return ROOM_DECISION_OPENER_WITH_PEER.format(peer=peer_nickname, verdict=verdict)
+    return ROOM_DECISION_OPENER_NO_PEER.format(verdict=verdict)
