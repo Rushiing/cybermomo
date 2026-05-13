@@ -305,42 +305,291 @@ async def stream_agent_reply(
 # ========================================
 
 async def stream_and_persist(
-    db: AsyncSession,
-    *,
-    conversation: AgentConversation,
+    conversation_id: int,
+    host_user_id: int,
     user_message_content: str,
 ) -> AsyncGenerator[str, None]:
     """
-    用户消息 → 流式回复的端到端封装。
+    用户消息 → 流式回复的端到端封装。**关键性能特性**:DB 连接只在 prep/persist
+    两个短阶段持有,LLM 流期间(几秒-几十秒)不占连接,避免池子被流式请求拖死。
 
-    顺序:
-      1. persist user message
-      2. yield tokens (streaming)
-      3. persist assistant message + async embed both
+    阶段:
+      1. (短) embed user query(no DB)
+      2. (短) Session 1:persist user msg + load profile/history/RAG context
+      3. (长) LLM stream(no DB)
+      4. (短) Session 2:persist assistant msg + embeds + 更新 conv last_message_at
 
-    供 router 一行调:
-      async for tok in stream_and_persist(...): yield tok
+    出错时(任何 await raise)— generator 的 except 块 yield 错误信息,调用方
+    router 用 except 兜底转 SSE 'error' event。
     """
-    user_msg = await persist_user_message(
-        db, conversation=conversation, content=user_message_content
-    )
+    from datetime import datetime, timezone
 
-    full_parts: list[str] = []
+    # Phase 1: embed query(off-pool)
+    query_vector: Optional[list[float]] = None
     try:
-        async for token in stream_agent_reply(
-            db,
-            conversation=conversation,
-            user_message_content=user_message_content,
-        ):
-            full_parts.append(token)
-            yield token
+        emb = await llm_embed(user_message_content)
+        query_vector = emb.vector
+    except Exception as e:
+        print(f"[agent_self] query embed failed: {e}")
+        # 不致命,RAG 走纯 .md profile 兜底,继续
+
+    # Phase 2: 短 session — 落 user msg + 拉上下文 + 拼 prompt
+    async with SessionLocal() as db:
+        conv = (
+            await db.execute(
+                select(AgentConversation).where(AgentConversation.id == conversation_id)
+            )
+        ).scalar_one_or_none()
+        if conv is None or conv.host_user_id != host_user_id:
+            raise ValueError("conversation not found or not owned")
+
+        user_msg = await persist_user_message(
+            db, conversation=conv, content=user_message_content
+        )
+        user_msg_id = user_msg.id
+
+        profile_json = await _load_host_profile(db, host_user_id)
+        history = await _load_recent_history(db, conversation_id)
+
+        if query_vector is not None:
+            chunks = await _retrieve_context_with_vector(
+                db,
+                user_id=host_user_id,
+                query_vector=query_vector,
+                exclude_conversation_id=conversation_id,
+            )
+        else:
+            chunks = []
+
+        system_prompt = build_system_prompt(profile_json=profile_json, chunks=chunks)
+
+        api_messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        for m in history:
+            if m.role in ("user", "assistant"):
+                api_messages.append({"role": m.role, "content": m.content})
+    # session 1 释放,DB 连接归还池子
+
+    # Phase 3: LLM 流(无 DB 占用)
+    full_parts: list[str] = []
+    error: Optional[str] = None
+    input_tokens = output_tokens = None
+    client = _get_client()
+    model = _model_for_role("host_agent")
+
+    try:
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=api_messages,
+            max_tokens=1024,
+            temperature=0.7,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                token = (delta.content or "") if delta else ""
+                if token:
+                    full_parts.append(token)
+                    yield token
+            if getattr(chunk, "usage", None):
+                input_tokens = chunk.usage.prompt_tokens
+                output_tokens = chunk.usage.completion_tokens
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        yield f"\n\n[Agent 一时回答不了:{error}]"
     finally:
         full_text = "".join(full_parts).strip()
-        if full_text:
-            assistant_msg = await persist_assistant_message(
-                db, conversation=conversation, content=full_text
+
+        # Phase 4: 短 session — 落 assistant msg + embeds + log + last_message_at
+        try:
+            async with SessionLocal() as db:
+                # 写 LLM call log
+                db.add(LlmCallLog(
+                    user_id=host_user_id,
+                    role="host_agent",
+                    provider="dashscope",
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=None,
+                    error=error,
+                    related_table="agent_conversations",
+                    related_id=conversation_id,
+                ))
+
+                # 回填 user msg 的 embedding(query 已经 embed 过了)
+                if query_vector is not None:
+                    user_row = (
+                        await db.execute(
+                            select(AgentConversationMessage).where(
+                                AgentConversationMessage.id == user_msg_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if user_row is not None and user_row.embedding is None:
+                        user_row.embedding = query_vector
+
+                # 落 assistant msg(如果生成了文本)+ 嵌入
+                if full_text:
+                    # 重新查 conv 拿最新 turn 计数
+                    conv = (
+                        await db.execute(
+                            select(AgentConversation).where(
+                                AgentConversation.id == conversation_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if conv is not None:
+                        assistant_msg = await persist_assistant_message(
+                            db, conversation=conv, content=full_text
+                        )
+                        # assistant embed
+                        try:
+                            emb_resp = await llm_embed(full_text)
+                            assistant_msg.embedding = emb_resp.vector
+                        except Exception as e:
+                            print(f"[agent_self] assistant embed failed: {e}")
+
+                await db.commit()
+        except Exception as e:
+            print(f"[agent_self] phase 4 persist failed: {e}")
+
+
+async def _retrieve_context_with_vector(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    query_vector: list[float],
+    exclude_conversation_id: Optional[int] = None,
+    top_k_per_source: int = 3,
+):
+    """retrieve_context 的变体 — 接受已 embed 过的 vector,省一次 LLM 调用"""
+    from src.agent_self.rag import (
+        ContextChunk,
+        _format_summary_for_rag,
+    )
+    from src.agent_chat.models import AgentChat
+    from src.auth.models import UserProfile
+    from src.match.models import Match
+    from src.md.models import MdSegment
+    from src.summary.models import Summary
+
+    out: list = []
+    qv = query_vector
+
+    # md segments
+    md_q = (
+        select(
+            MdSegment.id,
+            MdSegment.content,
+            MdSegment.segment_type,
+            MdSegment.embedding.cosine_distance(qv).label("distance"),
+        )
+        .where(MdSegment.user_id == user_id)
+        .where(MdSegment.embedding.is_not(None))
+        .order_by("distance")
+        .limit(top_k_per_source)
+    )
+    for row in (await db.execute(md_q)).all():
+        out.append(ContextChunk(
+            source="md",
+            ref_id=row.id,
+            text=row.content,
+            distance=float(row.distance),
+            metadata={"segment_type": row.segment_type},
+        ))
+
+    # summaries + peer nickname
+    sm_q = (
+        select(
+            Summary.id,
+            Summary.verdict,
+            Summary.summary_type,
+            Summary.highlights,
+            Summary.risks,
+            Summary.recommended_action,
+            Summary.embedding.cosine_distance(qv).label("distance"),
+            Match.user_a_id,
+            Match.user_b_id,
+        )
+        .outerjoin(AgentChat, AgentChat.id == Summary.agent_chat_id)
+        .outerjoin(Match, Match.id == AgentChat.match_id)
+        .where(Summary.host_user_id == user_id)
+        .where(Summary.embedding.is_not(None))
+        .order_by("distance")
+        .limit(top_k_per_source)
+    )
+    sm_rows = (await db.execute(sm_q)).all()
+    peer_ids = set()
+    for row in sm_rows:
+        if row.user_a_id is None or row.user_b_id is None:
+            continue
+        peer_ids.add(row.user_b_id if row.user_a_id == user_id else row.user_a_id)
+    nickname_by_uid: dict[int, str] = {}
+    if peer_ids:
+        nick_rows = (await db.execute(
+            select(UserProfile.user_id, UserProfile.nickname).where(
+                UserProfile.user_id.in_(peer_ids)
             )
-            # embedding 同步生成 — 量小,等一下不影响用户体感(stream 已经结束)
-            await embed_message_async(db, message=assistant_msg)
-        # user 消息也补 embedding(给后续 RAG 跨会话检索)
-        await embed_message_async(db, message=user_msg)
+        )).all()
+        nickname_by_uid = {r.user_id: r.nickname for r in nick_rows if r.nickname}
+    for row in sm_rows:
+        peer_id = None
+        if row.user_a_id is not None and row.user_b_id is not None:
+            peer_id = row.user_b_id if row.user_a_id == user_id else row.user_a_id
+        peer_nickname = nickname_by_uid.get(peer_id) if peer_id else None
+        text = _format_summary_for_rag(
+            verdict=row.verdict,
+            highlights=row.highlights,
+            risks=row.risks,
+            recommended=row.recommended_action,
+            peer_nickname=peer_nickname,
+        )
+        out.append(ContextChunk(
+            source="summary",
+            ref_id=row.id,
+            text=text,
+            distance=float(row.distance),
+            metadata={
+                "verdict": row.verdict,
+                "summary_type": row.summary_type,
+                "peer_user_id": peer_id,
+                "peer_nickname": peer_nickname,
+            },
+        ))
+
+    # past conversation messages
+    conv_q = (
+        select(
+            AgentConversationMessage.id,
+            AgentConversationMessage.conversation_id,
+            AgentConversationMessage.role,
+            AgentConversationMessage.content,
+            AgentConversationMessage.embedding.cosine_distance(qv).label("distance"),
+        )
+        .join(
+            AgentConversation,
+            AgentConversation.id == AgentConversationMessage.conversation_id,
+        )
+        .where(AgentConversation.host_user_id == user_id)
+        .where(AgentConversationMessage.embedding.is_not(None))
+        .where(AgentConversationMessage.role != "system")
+        .order_by("distance")
+        .limit(top_k_per_source)
+    )
+    if exclude_conversation_id is not None:
+        conv_q = conv_q.where(
+            AgentConversationMessage.conversation_id != exclude_conversation_id
+        )
+    for row in (await db.execute(conv_q)).all():
+        out.append(ContextChunk(
+            source="past_conversation",
+            ref_id=row.id,
+            text=row.content,
+            distance=float(row.distance),
+            metadata={"role": row.role, "conversation_id": row.conversation_id},
+        ))
+
+    out.sort(key=lambda c: c.distance)
+    return out

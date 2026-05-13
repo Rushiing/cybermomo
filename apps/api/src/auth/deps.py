@@ -11,6 +11,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from src.auth.models import User, UserProfile
 from src.auth.session import read_session_user_id
@@ -32,11 +33,16 @@ async def get_current_user(
     settings = get_settings()
 
     # 1. 优先 session cookie
+    # 用 joinedload eager-load profile,这样 /api/auth/me 不用再发第二条 SQL
     uid_from_cookie = read_session_user_id(request)
     if uid_from_cookie is not None:
         user = (
-            await db.execute(select(User).where(User.id == uid_from_cookie))
-        ).scalar_one_or_none()
+            await db.execute(
+                select(User)
+                .options(joinedload(User.profile))
+                .where(User.id == uid_from_cookie)
+            )
+        ).unique().scalar_one_or_none()
         if user is not None:
             return user
         # cookie 解出 user_id 但 db 里没这人(账户被删?)
@@ -66,7 +72,13 @@ async def get_current_user(
             detail="X-Mock-User-Id 必须是整数",
         )
 
-    user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    user = (
+        await db.execute(
+            select(User)
+            .options(joinedload(User.profile))
+            .where(User.id == uid)
+        )
+    ).unique().scalar_one_or_none()
     if user is not None:
         return user
 

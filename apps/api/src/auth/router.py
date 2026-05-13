@@ -41,32 +41,28 @@ router = APIRouter()
 @router.get("/me", response_model=UserMeResponse)
 async def me(
     current_user: User = CurrentUser,
-    db: AsyncSession = Depends(get_session),
 ):
-    """返回当前 user + profile(若已建)"""
-    # eager-load profile
-    stmt = (
-        select(User)
-        .options(selectinload(User.profile))
-        .where(User.id == current_user.id)
-    )
-    user = (await db.execute(stmt)).scalar_one()
+    """返回当前 user + profile(若已建)
+
+    性能:current_user 已经在 deps 里通过 joinedload 把 profile 一并拉了,
+    这里直接读 current_user.profile,不再发额外 SQL。
+    """
     profile_payload: UserProfilePayload | None = None
-    if user.profile is not None:
+    if current_user.profile is not None:
         profile_payload = UserProfilePayload(
-            nickname=user.profile.nickname,
-            age_band=user.profile.age_band,
-            gender=user.profile.gender,
-            mbti=user.profile.mbti,
-            avatar_url=user.profile.avatar_url,
+            nickname=current_user.profile.nickname,
+            age_band=current_user.profile.age_band,
+            gender=current_user.profile.gender,
+            mbti=current_user.profile.mbti,
+            avatar_url=current_user.profile.avatar_url,
         )
     return UserMeResponse(
-        id=user.id,
-        email=user.email,
-        google_name=user.google_name,
-        is_adult_confirmed=user.is_adult_confirmed,
-        onboarded_at=user.onboarded_at,
-        created_at=user.created_at,
+        id=current_user.id,
+        email=current_user.email,
+        google_name=current_user.google_name,
+        is_adult_confirmed=current_user.is_adult_confirmed,
+        onboarded_at=current_user.onboarded_at,
+        created_at=current_user.created_at,
         profile=profile_payload,
     )
 
