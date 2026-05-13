@@ -26,11 +26,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.models import AgentChat, AgentChatMessage
+from src.auth.models import UserProfile
 from src.llm.gateway import llm_chat
 from src.llm.types import Message
 from src.match.desensitize import _parse_loose_json
 from src.match.models import Match, MatchHook
 from src.md.models import MdDocument
+from src.shared.peer_prompt import format_peer_block
 
 
 # ========================================
@@ -77,11 +79,31 @@ PLATFORM_SYSTEM = """\
 - 摸到关键信号(对方对核心话题有兴趣 / 价值观契合或冲突)就可以 wrap
 - 反复 probe 同一话题没意义 — 已经清楚了就 wrap,别为聊而聊
 - 触到铁律或明显不合 → 直接 reject + wrap,不用客气
+- 字数:前 2 轮各 ≤ 40 字;中段允许一方长(≤ 120 字);第 6 轮起两方都 ≤ 50 字进入 wrap 节奏
+
+反"装"硬约束(违反会被人类判定为 AI 痕迹严重):
+- **禁用开场套话**:"很高兴认识你 / 真有意思 / 你说得很对 / 我也是这种感觉 / 完全同意"
+- **禁用结尾甩问**:"你觉得呢? / 你怎么看? / 你呢?"(同一场连发 2 次 = 红牌)
+- **禁用 AI 客气助词**:"非常 / 十分 / 真的太 / 确实 / 必须说 / 必须承认"
+- **禁用迎合性铺垫**:"这个问题很有意思 / 我也思考过这个问题 / 这让我想起..."
+
+允许甚至鼓励:
+- 打断、跳话题、半句话、"欸 / 嗯…"
+- 不接对方的梗(明确说"对这个没兴趣")
+- 冷场后另起一题
+- 不完美、有摩擦、明确反对、说"我不太行"或"我不在这"
+- 主语省略,口语短句,断点("…"),不一定要标点结束
+
+记住:这场聊天结束后会有真人审 — 真人最反感的是"两个 AI 在客气地互相恭维"。
+宁可显冷淡 / 有棱角,也别显"装"。
 """
 
 TURN_PROMPT_TEMPLATE = """\
 本轮你的宿主人格(v3 profile):
 {md_profile}
+
+# 对方是谁(让你 calibrate 语气/称呼 — 不要把女生当哥们儿、不要跨年龄段套同辈词)
+{peer_block}
 
 可用话题钩子(只你能看到 — 别人的 hooks 你看不到):
 {hooks}
@@ -206,6 +228,14 @@ async def run_agent_chat(
         await db.commit()
         return chat
 
+    # 拉双方 UserProfile(demographic — peer block + 称呼锚要用)
+    user_profile_rows = (await db.execute(
+        select(UserProfile).where(
+            UserProfile.user_id.in_([match.user_a_id, match.user_b_id]),
+        )
+    )).scalars().all()
+    up_by_user: dict[int, UserProfile] = {up.user_id: up for up in user_profile_rows}
+
     # 主循环
     speaker_order = [match.user_a_id, match.user_b_id]
     messages: list[AgentChatMessage] = []
@@ -214,11 +244,23 @@ async def run_agent_chat(
 
     for turn in range(1, max_turns + 1):
         speaker_user_id = speaker_order[(turn - 1) % 2]
+        peer_user_id = speaker_order[turn % 2]  # 不是 speaker 的那个
         # 只有 direction_target_user_id 那一侧的 Agent 拿到方向 hint;另一侧空
         this_direction = (
             direction_hint
             if direction_hint and speaker_user_id == direction_target_user_id
             else None
+        )
+        # peer demographic block(给 speaker Agent 看对方是谁)
+        speaker_up = up_by_user.get(speaker_user_id)
+        peer_up = up_by_user.get(peer_user_id)
+        peer_block = format_peer_block(
+            peer_nickname=peer_up.nickname if peer_up else None,
+            peer_user_id=peer_user_id,
+            peer_age_band=peer_up.age_band if peer_up else None,
+            peer_gender=peer_up.gender if peer_up else None,
+            peer_mbti=peer_up.mbti if peer_up else None,
+            host_age_band=speaker_up.age_band if speaker_up else None,
         )
         try:
             data = await _ask_one_turn(
@@ -232,6 +274,7 @@ async def run_agent_chat(
                 history=messages,
                 avoid_topic_refs=avoid_topic_refs or [],
                 direction_hint=this_direction,
+                peer_block=peer_block,
             )
         except Exception as e:
             print(f"[agent_chat] turn {turn} LLM failed: {e}")
@@ -296,6 +339,7 @@ async def _ask_one_turn(
     history: list[AgentChatMessage],
     avoid_topic_refs: list[str],
     direction_hint: Optional[str] = None,
+    peer_block: str = "",
 ) -> dict | None:
     """跑一轮 LLM,返回 parsed 字典 or None"""
     avoid_block = ""
@@ -313,6 +357,7 @@ async def _ask_one_turn(
 
     user_payload = TURN_PROMPT_TEMPLATE.format(
         md_profile=json.dumps(md_profile, ensure_ascii=False, indent=2),
+        peer_block=peer_block or "(对方信息不全 — 默认 @对方 / TA / 这位,不要套同辈/性别预设词)",
         hooks=_format_hooks_for_speaker(hooks, speaker_user_id),
         avoid_block=avoid_block + direction_block,
         history=_format_history_for_speaker(history, speaker_user_id),

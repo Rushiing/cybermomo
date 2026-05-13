@@ -62,6 +62,13 @@ HOST_PROFILE_TEMPLATE = """\
 """
 
 
+PEER_TEMPLATE = """\
+
+# 当前在聊的"对方"是谁(称呼按下面锚,不要自己脑补)
+{peer_block}
+"""
+
+
 CONTEXT_TEMPLATE = """\
 
 # 跟宿主当前问题相关的记忆(按相关度排序,只你能看到)
@@ -112,8 +119,14 @@ def build_system_prompt(
     *,
     profile_json: Optional[dict],
     chunks: list[ContextChunk],
+    peer_block: Optional[str] = None,
 ) -> str:
-    """组装完整 system prompt:base + 宿主人格 + 检索上下文"""
+    """组装完整 system prompt:base + 宿主人格 + (可选) peer demographic + 检索上下文
+
+    peer_block:当 conversation scope 关联具体 peer(revisit / room / plaza)时
+    由 engine 解析 context_refs 拿到 peer 的 UserProfile 后生成。general scope
+    没有具体 peer,这里传 None。
+    """
     parts = [PLATFORM_SYSTEM_BASE]
 
     if profile_json:
@@ -123,6 +136,9 @@ def build_system_prompt(
                 profile_summary=json.dumps(summary, ensure_ascii=False, indent=2)
             )
         )
+
+    if peer_block:
+        parts.append(PEER_TEMPLATE.format(peer_block=peer_block))
 
     parts.append(CONTEXT_TEMPLATE.format(chunks=_format_chunks(chunks)))
 

@@ -27,13 +27,17 @@ from typing import AsyncGenerator, Optional
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agent_chat.models import AgentChat
 from src.agent_self.models import AgentConversation, AgentConversationMessage
 from src.agent_self.prompts import build_system_prompt
 from src.agent_self.rag import retrieve_context
+from src.auth.models import UserProfile
 from src.llm.gateway import _get_client, _model_for_role, llm_embed
 from src.llm.models import LlmCallLog
+from src.match.models import Match
 from src.md.models import MdDocument
 from src.shared.db import SessionLocal
+from src.shared.peer_prompt import format_peer_block
 
 
 # ========================================
@@ -194,6 +198,67 @@ async def _load_host_profile(db: AsyncSession, user_id: int) -> Optional[dict]:
     return md.profile_json if md else None
 
 
+async def _resolve_peer_user_id(
+    db: AsyncSession, *, conversation: AgentConversation
+) -> Optional[int]:
+    """
+    根据会话 scope + context_refs 解出当前在聊的"对方 user_id"(没有就 None)。
+
+      - general:没有 peer
+      - revisit:context_refs.peer_user_id
+      - plaza:context_refs.target_user_id
+      - room:context_refs.agent_chat_id → 查 AgentChat → match → 对方 user_id
+    """
+    refs = conversation.context_refs or {}
+    if conversation.scope == "revisit":
+        pid = refs.get("peer_user_id")
+        return int(pid) if pid else None
+    if conversation.scope == "plaza":
+        pid = refs.get("target_user_id")
+        return int(pid) if pid else None
+    if conversation.scope == "room":
+        chat_id = refs.get("agent_chat_id")
+        if not chat_id:
+            return None
+        chat = (await db.execute(
+            select(AgentChat).where(AgentChat.id == int(chat_id))
+        )).scalar_one_or_none()
+        if chat is None:
+            return None
+        match = (await db.execute(
+            select(Match).where(Match.id == chat.match_id)
+        )).scalar_one_or_none()
+        if match is None:
+            return None
+        return match.user_b_id if match.user_a_id == conversation.host_user_id else match.user_a_id
+    return None
+
+
+async def _load_peer_block(
+    db: AsyncSession, *, conversation: AgentConversation
+) -> Optional[str]:
+    """如果 conversation 关联了具体 peer,返回 peer demographic prompt block"""
+    peer_user_id = await _resolve_peer_user_id(db, conversation=conversation)
+    if peer_user_id is None:
+        return None
+    rows = (await db.execute(
+        select(UserProfile).where(
+            UserProfile.user_id.in_([conversation.host_user_id, peer_user_id])
+        )
+    )).scalars().all()
+    by_uid = {up.user_id: up for up in rows}
+    host_up = by_uid.get(conversation.host_user_id)
+    peer_up = by_uid.get(peer_user_id)
+    return format_peer_block(
+        peer_nickname=peer_up.nickname if peer_up else None,
+        peer_user_id=peer_user_id,
+        peer_age_band=peer_up.age_band if peer_up else None,
+        peer_gender=peer_up.gender if peer_up else None,
+        peer_mbti=peer_up.mbti if peer_up else None,
+        host_age_band=host_up.age_band if host_up else None,
+    )
+
+
 async def _load_recent_history(
     db: AsyncSession, conversation_id: int, *, max_msgs: int = 12
 ) -> list[AgentConversationMessage]:
@@ -236,7 +301,10 @@ async def stream_agent_reply(
         query=user_message_content,
         exclude_conversation_id=conversation.id,
     )
-    system_prompt = build_system_prompt(profile_json=profile_json, chunks=chunks)
+    peer_block = await _load_peer_block(db, conversation=conversation)
+    system_prompt = build_system_prompt(
+        profile_json=profile_json, chunks=chunks, peer_block=peer_block
+    )
 
     history = await _load_recent_history(db, conversation.id)
 
@@ -362,7 +430,10 @@ async def stream_and_persist(
         else:
             chunks = []
 
-        system_prompt = build_system_prompt(profile_json=profile_json, chunks=chunks)
+        peer_block = await _load_peer_block(db, conversation=conv)
+        system_prompt = build_system_prompt(
+            profile_json=profile_json, chunks=chunks, peer_block=peer_block
+        )
 
         api_messages: list[dict] = [{"role": "system", "content": system_prompt}]
         for m in history:
