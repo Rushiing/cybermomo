@@ -33,9 +33,12 @@ export default function MbtiPicker({ value, onChange }: Props) {
   const [ns, setNs] = useState<string>(value && isValidMbti(value) ? value[1] : "")
   const [tf, setTf] = useState<string>(value && isValidMbti(value) ? value[2] : "")
   const [jp, setJp] = useState<string>(value && isValidMbti(value) ? value[3] : "")
-  const [unknown, setUnknown] = useState<boolean>(!isValidMbti(value))
+  // 默认不勾选「不知道 / 不想填」— 让用户主动选(之前从 value=null 推断成勾选会
+  // 把维度选项一并灰掉,用户上来就以为不能选)
+  const [unknown, setUnknown] = useState<boolean>(false)
 
   // value prop 变化时同步内部 state(用于外部 reset)
+  // 只在 value 是完整 MBTI 时同步,value=null 不动 unknown — 由用户控制
   useEffect(() => {
     if (isValidMbti(value)) {
       setEi(value![0])
@@ -43,9 +46,6 @@ export default function MbtiPicker({ value, onChange }: Props) {
       setTf(value![2])
       setJp(value![3])
       setUnknown(false)
-    } else {
-      // 不重置已选维度 — 用户可能正在切换 unknown,内部 state 保留
-      setUnknown(value === null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
