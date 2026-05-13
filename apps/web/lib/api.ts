@@ -189,6 +189,7 @@ export interface UserMeResponse {
   email?: string | null
   username?: string | null
   google_name?: string | null
+  google_avatar_url?: string | null
   is_adult_confirmed: boolean
   onboarded_at?: string | null
   created_at: string

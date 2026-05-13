@@ -10,6 +10,7 @@
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
+import AvatarUpload from "@/components/AvatarUpload"
 import MbtiPicker from "@/components/MbtiPicker"
 import { api, type UpsertProfileRequest, type UserMeResponse } from "@/lib/api"
 
@@ -28,17 +29,21 @@ export default function MdBasicPage() {
   const [gender, setGender] = useState<string>("male")
   // MBTI:null = 不知道或没填全;"INFJ" 之类完整串才会保存
   const [mbti, setMbti] = useState<string | null>(null)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [googleAvatarUrl, setGoogleAvatarUrl] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     // 拉旧 profile 预填
     api.get<UserMeResponse>("/api/auth/me").then(me => {
+      if (me.google_avatar_url) setGoogleAvatarUrl(me.google_avatar_url)
       if (me.profile) {
         setNickname(me.profile.nickname)
         if (me.profile.age_band) setAgeBand(me.profile.age_band)
         if (me.profile.gender) setGender(me.profile.gender)
         if (me.profile.mbti) setMbti(me.profile.mbti)
+        if (me.profile.avatar_url) setAvatarUrl(me.profile.avatar_url)
       }
     }).catch(() => { /* 没有就用默认 */ })
   }, [])
@@ -54,6 +59,7 @@ export default function MdBasicPage() {
           age_band: ageBand,
           gender: gender,
           mbti: mbti || undefined,
+          avatar_url: avatarUrl || undefined,
         },
       }
       await api.put("/api/auth/me/profile", body)
@@ -63,8 +69,6 @@ export default function MdBasicPage() {
       setSubmitting(false)
     }
   }
-
-  const initial = nickname.trim().charAt(0) || "你"
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -88,20 +92,12 @@ export default function MdBasicPage() {
 
         {/* 头像 */}
         <Field label="头像">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center text-white text-[22px] font-semibold flex-shrink-0 bg-gradient-to-br from-[#C7E8D5] to-primary">
-              {initial}
-            </div>
-            <div className="flex gap-2">
-              <button className="px-3.5 py-2 border-[1.5px] border-line rounded-md text-[13px] text-ink-secondary hover:border-ink-secondary hover:text-ink transition" disabled>
-                用 Google 头像
-              </button>
-              <button className="px-3.5 py-2 border-[1.5px] border-line rounded-md text-[13px] text-ink-secondary hover:border-ink-secondary hover:text-ink transition" disabled>
-                上传图片
-              </button>
-            </div>
-          </div>
-          <p className="text-[11px] text-ink-tertiary mt-2">头像上传 OAuth 接入后启用</p>
+          <AvatarUpload
+            value={avatarUrl}
+            onChange={setAvatarUrl}
+            fallbackInitial={nickname}
+            googleAvatarUrl={googleAvatarUrl}
+          />
         </Field>
 
         {/* 昵称 */}

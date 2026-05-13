@@ -14,6 +14,7 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 
+import AvatarUpload from "@/components/AvatarUpload"
 import MbtiPicker from "@/components/MbtiPicker"
 import Toast from "@/components/Toast"
 import Topbar from "@/components/Topbar"
@@ -141,8 +142,13 @@ export default function MePage() {
           <>
             {/* 头像 + 昵称 */}
             <section className="flex items-center gap-4 mb-8">
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary flex items-center justify-center text-white text-[22px] font-semibold flex-shrink-0">
-                {me?.profile?.nickname?.charAt(0) || "?"}
+              <div className="w-16 h-16 rounded-full overflow-hidden bg-gradient-to-br from-[#C7E8D5] to-primary flex items-center justify-center text-white text-[22px] font-semibold flex-shrink-0">
+                {me?.profile?.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={me.profile.avatar_url} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  me?.profile?.nickname?.charAt(0) || "?"
+                )}
               </div>
               <div>
                 <div className="text-xl font-semibold">{me?.profile?.nickname || "未设置昵称"}</div>
@@ -409,6 +415,7 @@ function ProfileCard({
   const [ageBand, setAgeBand] = useState<string>("")
   const [gender, setGender] = useState<string>("")
   const [mbti, setMbti] = useState<string | null>(null)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   function startEdit() {
@@ -416,6 +423,7 @@ function ProfileCard({
     setAgeBand(me?.profile?.age_band || AGE_OPTIONS[1])
     setGender(me?.profile?.gender || "prefer_not_to_say")
     setMbti(me?.profile?.mbti || null)
+    setAvatarUrl(me?.profile?.avatar_url || null)
     setEditing(true)
   }
 
@@ -432,6 +440,7 @@ function ProfileCard({
           age_band: ageBand,
           gender,
           mbti: mbti || undefined,
+          avatar_url: avatarUrl || undefined,
         },
       }
       const updated = await api.put<UserMeResponse, UpsertProfileRequest>(
@@ -468,6 +477,16 @@ function ProfileCard({
   return (
     <Card>
       <div className="space-y-4">
+        <div>
+          <div className="text-[12px] text-ink-secondary mb-1.5">头像</div>
+          <AvatarUpload
+            value={avatarUrl}
+            onChange={setAvatarUrl}
+            fallbackInitial={nickname}
+            googleAvatarUrl={me?.google_avatar_url || undefined}
+          />
+        </div>
+
         <div>
           <div className="text-[12px] text-ink-secondary mb-1.5">昵称</div>
           <input

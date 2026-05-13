@@ -4,7 +4,14 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+# avatar_url 接受两种形态:
+#   1. 普通 http(s) 链接(Google 头像 / 外部 CDN)— 短
+#   2. data:image/... base64 内嵌(用户本地上传 + 客户端压缩后)— 长
+# 200KB 上限对 256×256 JPEG quality=0.85 留足空间(实际 ~50-80KB)
+_AVATAR_MAX_LEN = 200_000
 
 
 class UserProfilePayload(BaseModel):
@@ -13,7 +20,23 @@ class UserProfilePayload(BaseModel):
     age_band: Optional[Literal["18-25", "25-30", "30-35", "35-40", "40+"]] = None
     gender: Optional[Literal["male", "female", "non_binary", "prefer_not_to_say"]] = None
     mbti: Optional[str] = Field(default=None, max_length=8)
-    avatar_url: Optional[str] = Field(default=None, max_length=500)
+    avatar_url: Optional[str] = Field(default=None, max_length=_AVATAR_MAX_LEN)
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        # 必须是 http(s) 链接或 data:image/ 内嵌
+        if v.startswith(("http://", "https://")):
+            return v
+        if v.startswith("data:image/"):
+            # 粗校验 data URL 格式:data:image/<type>;base64,<payload>
+            head, _, payload = v.partition(",")
+            if ";base64" not in head or not payload:
+                raise ValueError("data URL 格式不对,必须是 data:image/...;base64,<payload>")
+            return v
+        raise ValueError("avatar_url 必须是 http(s) 链接或 data:image/... base64 内嵌")
 
 
 class UpsertProfileRequest(BaseModel):
@@ -28,6 +51,7 @@ class UserMeResponse(BaseModel):
     email: Optional[str] = None  # 现在可空(密码注册可选填)
     username: Optional[str] = None  # 密码用户的登录 id
     google_name: Optional[str] = None
+    google_avatar_url: Optional[str] = None  # OAuth 拿到的头像 URL,前端"用 Google 头像"按钮源
     is_adult_confirmed: bool
     onboarded_at: Optional[datetime] = None
     created_at: datetime
