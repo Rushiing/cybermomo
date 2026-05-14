@@ -4,6 +4,10 @@ Admin API · 给外部 cron / 一次性 ops 调用,需要 X-Admin-Secret 头
 - POST /api/admin/observation-sweep        24h 沉默自动结束 + 观察报告
 - POST /api/admin/rerun-pipeline/{uid}     给某 user_id 重跑完整 pipeline(debug)
 - POST /api/admin/backfill-embeddings      回填存量 md_segments / summaries 的 embedding(幂等)
+- POST /api/admin/seed/insert              冷启动 · 插 20 mock 用户(同步,几秒)
+- POST /api/admin/seed/run-pipeline        冷启动 · BackgroundTask 跑 mock pipeline
+- GET  /api/admin/seed/status              冷启动 · 看 pipeline 进度
+- GET  /api/admin/seed/verify              冷启动 · 只读校验 mock pool 数据
 
 Railway Cron Jobs 配置示例(observation sweep · 每小时):
    curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
@@ -21,6 +25,13 @@ from src.agent_self.revisit import seed_revisit_after_silent_sweep
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
 from src.match.pipeline import run_full_pipeline_for_user
+from src.seed.operations import (
+    get_pipeline_job_state,
+    insert_all_mock_users,
+    is_pipeline_running,
+    run_pipeline_for_all_mock_users,
+    verify_all,
+)
 from src.shared.db import SessionLocal, get_session
 from src.shared.settings import get_settings
 
@@ -164,4 +175,113 @@ async def backfill_embeddings(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"backfill 失败: {e}",
+        )
+
+
+# ========================================
+# 冷启动 seed · 远程触发(给 Claude 用,免本地配 DATABASE_URL)
+# ========================================
+
+
+@router.post("/seed/insert")
+async def seed_insert_users(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    把 src.seed.archetypes.MOCK_USERS 全部 upsert 进库(几秒,同步)。
+
+    幂等:按 username 查重,已存在的 mock_xxx_x 用户跳过插入。
+    返回结构化结果(total / newly_created / already_exists / users)。
+
+    跟 cron 不同,这是一次性 ops 调用,所以同步返回结果方便 caller 一眼看完。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        result = await insert_all_mock_users()
+        return {"ok": True, **result}
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"seed insert 失败: {type(e).__name__}: {e}",
+        )
+
+
+@router.post("/seed/run-pipeline")
+async def seed_run_pipeline(
+    background_tasks: BackgroundTasks,
+    user_limit: Optional[int] = None,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    用 BackgroundTask 异步跑 mock 用户的全链路 pipeline(match → desensitize →
+    agent_chat → summary)。立即返 202 + job 概况,实际跑 30-90 分钟。
+
+    并发保护:如果已有 pipeline 在跑(进程级状态),返 409。
+
+    user_limit 可选 — 跑前 N 个 mock 用户(默认全部 20)。8 人 × top_k=5 大约
+    产 30-40 对 pair(match service 内部 dedupe)。
+
+    幂等:run_full_pipeline_for_user 内部 _existing_match_partners 去重已 match 过的对。
+    """
+    _require_admin(x_admin_secret)
+
+    if is_pipeline_running():
+        existing = get_pipeline_job_state()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                f"pipeline 已在跑(processed={existing['processed_user_count']}/"
+                f"{existing['target_user_count']}),GET /seed/status 看进度"
+            ),
+        )
+
+    background_tasks.add_task(
+        run_pipeline_for_all_mock_users, user_limit=user_limit
+    )
+    return {
+        "ok": True,
+        "accepted": True,
+        "user_limit": user_limit,
+        "hint": "GET /api/admin/seed/status 看进度,可能需要 30-90 分钟",
+    }
+
+
+@router.get("/seed/status")
+async def seed_pipeline_status(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    返回 pipeline job 当前状态(进程级 in-memory state):
+      status: idle | running | done | failed
+      processed_user_count / target_user_count / current_user_id
+      started_at / finished_at
+      errors: [{user_id, error}]
+
+    Railway 重启会清空,但 pipeline 本身幂等可重跑。
+    """
+    _require_admin(x_admin_secret)
+    return get_pipeline_job_state()
+
+
+@router.get("/seed/verify")
+async def seed_verify(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    只读校验 mock pool:
+      pool:user 数 + archetype / gender / age 分布
+      agent_chats:总数 + status / end_reason 分布
+      summaries:总数 + verdict 分布(对照 AGENTS.md §3.5 target 30/50/20%)
+      health_warnings:数量异常 / verdict 偏离 target ±10% 的提示
+      ok:health_warnings 为空 = 通过
+
+    不触发任何写入,可随时调。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        return await verify_all()
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"verify 失败: {type(e).__name__}: {e}",
         )
