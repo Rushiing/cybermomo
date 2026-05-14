@@ -1,3 +1,15 @@
+"""
+pytest 全局 fixture(auth 单测共用)
+
+⚠️ 本文件包含**进程级 monkey patch**(下面的 @compiles BigInteger → INTEGER):
+    一旦 Python 进程 import 了这个模块,所有 SQLAlchemy 模型对 SQLite 方言的
+    BigInteger 列都会编译成 INTEGER。这是为了让 auth.users.id (BigInteger 主键)
+    在 SQLite 上能自增 — Postgres BigInteger 自增没问题,SQLite 必须是 INTEGER。
+
+    后果:**生产代码不要 import 此文件**(它在 tests/ 目录下,正常不会被生产引用,
+    但加这条警示防新人在 src/ 里写 `from tests.conftest import ...`)。
+    如果未来要在多 DB 方言下做 type 测试,这里要重做。
+"""
 from collections.abc import AsyncIterator, Callable
 
 import pytest
@@ -18,6 +30,7 @@ from src.shared.settings import get_settings
 
 @compiles(BigInteger, "sqlite")
 def _compile_bigint_sqlite(_type: BigInteger, _compiler, **_kw) -> str:
+    """让 SQLite 把 BigInteger 当 INTEGER(进程级,见文件头警示)"""
     return "INTEGER"
 
 
