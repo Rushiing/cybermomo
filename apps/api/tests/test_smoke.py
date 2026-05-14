@@ -36,10 +36,10 @@ async def test_auth_me_requires_auth(client: AsyncClient):
     assert resp.status_code == 401
 
 
-async def test_oauth_login_not_implemented(client: AsyncClient):
-    """OAuth 接入前 /api/auth/google/login 应 501"""
+async def test_oauth_login_requires_config(client: AsyncClient):
+    """OAuth 已接入;未配置 Google secrets 时应 503"""
     resp = await client.get("/api/auth/google/login")
-    assert resp.status_code == 501
+    assert resp.status_code == 503
 
 
 async def test_md_me_requires_auth(client: AsyncClient):
