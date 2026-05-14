@@ -24,7 +24,11 @@ from sqlalchemy.orm import selectinload
 
 from src.auth.deps import CurrentUser
 from src.auth.models import User, UserProfile
-from src.auth.password import hash_password, verify_password
+from src.auth.password import (
+    hash_password,
+    verify_password,
+    verify_password_with_timing_mitigation,
+)
 from src.auth.schemas import (
     LoginRequest,
     RegisterRequest,
@@ -214,7 +218,11 @@ async def login(
     payload: LoginRequest,
     db: AsyncSession = Depends(get_session),
 ):
-    """用户名 + 密码登录。失败一律返 401(不区分 user 不存在 vs 密码错),避免枚举攻击。"""
+    """用户名 + 密码登录。失败一律返 401(不区分 user 不存在 vs 密码错),避免枚举攻击。
+
+    Timing attack 防护:user 不存在时也跑一次 bcrypt(对一个 dummy hash),让两条
+    失败路径耗时一致,避免 timing channel 泄露用户名是否存在。
+    """
     # 一次查 user + profile(eager load,省一个 RTT)
     user = (await db.execute(
         select(User)
@@ -222,7 +230,9 @@ async def login(
         .where(User.username == payload.username)
     )).scalar_one_or_none()
 
-    if user is None or not verify_password(payload.password, user.password_hash):
+    # 关键:无论 user 存在与否,都走 timing_mitigation 版本 — 不存在时跑 dummy 等耗
+    pw_hash = user.password_hash if user is not None else None
+    if not verify_password_with_timing_mitigation(payload.password, pw_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",

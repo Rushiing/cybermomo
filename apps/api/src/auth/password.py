@@ -46,3 +46,48 @@ def verify_password(plain: str, hashed: str | None) -> bool:
         return bcrypt.checkpw(_prehash(plain), hashed.encode("ascii"))
     except Exception:
         return False
+
+
+# ========================================
+# Timing-attack mitigation(用户不存在时也要跑 bcrypt 等耗时)
+# ========================================
+#
+# 之前 login 的写法:user is None 直接 raise 401。问题是 bcrypt verify ~100ms,
+# user 不存在跳过 bcrypt → 响应快几十毫秒,攻击者可以用 timing 探测用户名是否存在。
+# 即使错误 detail 相同(都是 "用户名或密码错误"),timing channel 仍能区分。
+#
+# 修复:维护一个全局 dummy hash,user 不存在时也跑一次 verify_password(plain, dummy)
+# (永远返 False),让两条路径耗时一致。
+#
+# dummy hash 用 lazy init —— 第一次 login 才生成,避免 import 时跑 bcrypt 拖慢启动。
+_DUMMY_HASH: str | None = None
+
+
+def _get_dummy_hash() -> str:
+    """返回一个固定的合法 bcrypt hash 字符串,用于 timing 等耗。
+
+    内容是个随机字符串的 hash,永远不会被任何真用户密码匹配上。
+    rounds 跟 hash_password 一致,确保 verify 耗时一致。
+    """
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("__cybermomo_dummy_for_timing_mitigation__")
+    return _DUMMY_HASH
+
+
+def verify_password_with_timing_mitigation(plain: str, hashed: str | None) -> bool:
+    """跟 verify_password 一样,但 hashed=None 时也跑一次 bcrypt 让耗时一致。
+
+    login endpoint 用这个 — user 不存在时也走 bcrypt 等耗,防 timing enumeration。
+    其他场景(自己改密码、确认操作)用 verify_password 即可,不需要等耗。
+    """
+    if not plain:
+        return False
+    if hashed is None:
+        # 跑 dummy 等耗,然后明确返 False
+        bcrypt.checkpw(_prehash(plain), _get_dummy_hash().encode("ascii"))
+        return False
+    try:
+        return bcrypt.checkpw(_prehash(plain), hashed.encode("ascii"))
+    except Exception:
+        return False
