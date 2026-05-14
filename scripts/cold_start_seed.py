@@ -31,6 +31,7 @@ match → desensitize → agent_chat → summary 的全链路。
 from __future__ import annotations
 
 import asyncio
+import argparse
 import os
 import sys
 import time
@@ -46,13 +47,16 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
 from datetime import datetime, timezone  # noqa: E402
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import func, or_, select  # noqa: E402
 
+from src.agent_chat.models import AgentChat  # noqa: E402
 from src.auth.models import User, UserProfile  # noqa: E402
 from src.auth.password import hash_password  # noqa: E402
+from src.match.models import Match  # noqa: E402
 from src.match.pipeline import run_full_pipeline_for_user  # noqa: E402
 from src.md.models import MdDocument  # noqa: E402
 from src.shared.db import SessionLocal, engine  # noqa: E402
+from src.summary.models import Summary  # noqa: E402
 
 from mock_user_archetypes import MOCK_USERS, build_profile_for  # noqa: E402
 
@@ -61,6 +65,25 @@ DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 SKIP_PIPELINE = os.environ.get("SKIP_PIPELINE", "0") == "1"
 PIPELINE_USER_LIMIT = int(os.environ.get("PIPELINE_USER_LIMIT", str(len(MOCK_USERS))))
 DEFAULT_PASSWORD = os.environ.get("MOCK_PASSWORD", "mock_seed_2026")
+ARCHETYPE_LETTERS = ("A", "B", "C", "D", "E", "F", "G", "H")
+TARGET_VERDICT_RATIOS = {
+    "来电": 0.30,
+    "有点意思再观察": 0.50,
+    "不合": 0.20,
+}
+VERDICT_TOLERANCE = 0.10
+
+
+def _pct(n: int, total: int) -> str:
+    if total <= 0:
+        return "0%"
+    return f"{round(n / total * 100):.0f}%"
+
+
+def _format_kv_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "(none)"
+    return ", ".join(f"{k}={v}" for k, v in counts.items())
 
 
 # ========================================
@@ -144,6 +167,180 @@ async def run_pipeline_for(user_id: int) -> None:
 
 
 # ========================================
+# Verification(只读)
+# ========================================
+
+async def _count_rows(stmt) -> int:
+    async with SessionLocal() as db:
+        return int((await db.execute(stmt)).scalar_one() or 0)
+
+
+async def _group_counts(stmt) -> dict[str, int]:
+    async with SessionLocal() as db:
+        rows = (await db.execute(stmt)).all()
+    return {str(k): int(v or 0) for k, v in rows}
+
+
+def _mock_user_ids_select():
+    return select(User.id).where(User.is_system_mock.is_(True))
+
+
+def _mock_chat_filter():
+    mock_user_ids = _mock_user_ids_select()
+    return or_(
+        Match.user_a_id.in_(mock_user_ids),
+        Match.user_b_id.in_(mock_user_ids),
+    )
+
+
+async def verify_mock_pool() -> dict[str, int]:
+    print("=== Mock Pool Verification ===")
+
+    mock_count = await _count_rows(
+        select(func.count()).select_from(User).where(User.is_system_mock.is_(True))
+    )
+    print(f"Mock users (is_system_mock=true): {mock_count}")
+
+    archetype_counts: dict[str, int] = {}
+    for letter in ARCHETYPE_LETTERS:
+        count = await _count_rows(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.is_system_mock.is_(True),
+                User.username.like(f"mock\\_%\\_{letter.lower()}%", escape="\\"),
+            )
+        )
+        archetype_counts[letter] = count
+    print(f"  by archetype: {_format_kv_counts(archetype_counts)}")
+
+    gender_counts = await _group_counts(
+        select(UserProfile.gender, func.count())
+        .join(User, UserProfile.user_id == User.id)
+        .where(User.is_system_mock.is_(True))
+        .group_by(UserProfile.gender)
+        .order_by(UserProfile.gender)
+    )
+    print(f"  by gender: {_format_kv_counts(gender_counts)}")
+
+    age_counts = await _group_counts(
+        select(UserProfile.age_band, func.count())
+        .join(User, UserProfile.user_id == User.id)
+        .where(User.is_system_mock.is_(True))
+        .group_by(UserProfile.age_band)
+        .order_by(UserProfile.age_band)
+    )
+    print(f"  by age_band: {_format_kv_counts(age_counts)}")
+
+    return {"mock_count": mock_count, **{f"archetype_{k}": v for k, v in archetype_counts.items()}}
+
+
+async def verify_agent_chats() -> dict[str, int]:
+    print("\n=== Agent Chats ===")
+
+    base = (
+        select(func.count())
+        .select_from(AgentChat)
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(_mock_chat_filter())
+    )
+    total = await _count_rows(base)
+    print(f"Total chats involving mock users: {total}")
+
+    status_counts = await _group_counts(
+        select(AgentChat.status, func.count())
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(_mock_chat_filter())
+        .group_by(AgentChat.status)
+        .order_by(AgentChat.status)
+    )
+    for status, count in status_counts.items():
+        suffix = "  ← 异常,提示用户检查" if status == "running" and count else ""
+        print(f"  {status}: {count} ({_pct(count, total)}){suffix}")
+
+    end_reason_counts = await _group_counts(
+        select(AgentChat.end_reason, func.count())
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(_mock_chat_filter(), AgentChat.end_reason.is_not(None))
+        .group_by(AgentChat.end_reason)
+        .order_by(func.count().desc(), AgentChat.end_reason)
+    )
+    print(f"  end_reason 分布: {_format_kv_counts(end_reason_counts)}")
+
+    return {"total_chats": total, **{f"status_{k}": v for k, v in status_counts.items()}}
+
+
+async def verify_summaries() -> dict[str, int]:
+    print("\n=== Summaries ===")
+
+    total = await _count_rows(
+        select(func.count())
+        .select_from(Summary)
+        .join(AgentChat, Summary.agent_chat_id == AgentChat.id)
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(_mock_chat_filter())
+    )
+    print(f"Total summaries involving mock users: {total}")
+
+    verdict_counts = await _group_counts(
+        select(Summary.verdict, func.count())
+        .join(AgentChat, Summary.agent_chat_id == AgentChat.id)
+        .join(Match, AgentChat.match_id == Match.id)
+        .where(_mock_chat_filter())
+        .group_by(Summary.verdict)
+        .order_by(Summary.verdict)
+    )
+    for verdict in ("来电", "有点意思再观察", "不合"):
+        count = verdict_counts.get(verdict, 0)
+        target = TARGET_VERDICT_RATIOS[verdict]
+        print(f"  verdict {verdict}: {count} ({_pct(count, total)})  ← target ~{target * 100:.0f}%")
+    for verdict, count in verdict_counts.items():
+        if verdict not in TARGET_VERDICT_RATIOS:
+            print(f"  verdict {verdict}: {count} ({_pct(count, total)})  ← 未知 verdict")
+
+    return {"total_summaries": total, **{f"verdict_{k}": v for k, v in verdict_counts.items()}}
+
+
+def print_health(pool: dict[str, int], chats: dict[str, int], summaries: dict[str, int]) -> None:
+    print("\n=== Health ===")
+
+    expected_mock_count = len(MOCK_USERS)
+    if pool["mock_count"] == expected_mock_count:
+        print(f"✓ Mock count matches archetypes ({expected_mock_count})")
+    else:
+        print(f"⚠ Mock count mismatch: expected {expected_mock_count}, got {pool['mock_count']}")
+
+    running = chats.get("status_running", 0)
+    if running:
+        print(f"⚠ {running} chats still running (重跑过没?)")
+    else:
+        print("✓ No running agent chats")
+
+    total_summaries = summaries.get("total_summaries", 0)
+    verdict_ok = True
+    if total_summaries <= 0:
+        verdict_ok = False
+    for verdict, target in TARGET_VERDICT_RATIOS.items():
+        actual = summaries.get(f"verdict_{verdict}", 0) / total_summaries if total_summaries else 0
+        if abs(actual - target) > VERDICT_TOLERANCE:
+            verdict_ok = False
+            print(
+                f"⚠ Verdict {verdict} outside tolerance: "
+                f"{actual * 100:.0f}% vs target {target * 100:.0f}%"
+            )
+    if verdict_ok:
+        print("✓ Verdict distribution within tolerance(±10%)")
+
+
+async def verify() -> int:
+    pool = await verify_mock_pool()
+    chats = await verify_agent_chats()
+    summaries = await verify_summaries()
+    print_health(pool, chats, summaries)
+    return 0
+
+
+# ========================================
 # main
 # ========================================
 
@@ -194,9 +391,22 @@ async def main() -> int:
     return 0
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Seed CyberMOMO cold-start mock users or verify seeded data.",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="只读检查 mock pool、agent_chat 和 summary verdict 分布,不执行 seed。",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
     try:
-        rc = asyncio.run(main())
+        args = parse_args()
+        rc = asyncio.run(verify() if args.verify else main())
     finally:
         # 关 async engine,避免 'unclosed connector' warning
         try:
