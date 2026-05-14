@@ -112,35 +112,50 @@ async def _create_summary_bundle(db: AsyncSession, *, with_messages: bool = True
     return chat, users[0], users[1]
 
 
-def test_summary_system_template_uses_decision_tree_not_distribution_quota():
-    """verdict prompt 是决策树(按顺序排除"不合"→"来电"→"再观察"),不再用比例锚
+def test_summary_system_template_uses_decision_tree_with_bidirectional_and():
+    """verdict prompt 是决策树 + 双向 AND(不是单侧信号就拍来电)
 
-    历史背景:第一版 prompt 没分布锚,跑出来清一色"来电"(过度乐观);第二版
-    加了"30%/50%/20%"比例锚 + "AI 互捧"警告,跑出来清一色"再观察"(过度保守)。
-    第三版改成决策树:**"再观察"是兜底档不是默认档**,必须先排除"不合"和"来电"
-    才能落"再观察"。本 test 锁住决策树的关键字面,防止再回退到比例锚那一版。
+    校准史(都用 mock-vs-mock 8 轮对话验证过):
+    - v1 无锚 → 清一色"来电"(LLM 总是给好评)
+    - v2 比例锚 30/50/20 + AI 互捧警告 → 94% "再观察"
+    - v3 决策树 + 单侧 OR → 87% "来电"(单侧热情骗到判断)
+    - v4 决策树 + 双向 AND → 这版,要求"来电"必须双方都有强信号
+
+    本 test 锁住 v4 的关键设计点防回退:
+    - 决策树结构(三步)
+    - "来电"必须双向(条件 A 两侧延展 + 条件 B 双方 warmth)
+    - "再观察"是默认落点不是兜底
+    - 不能回退到比例锚那版
     """
     prompt = SUMMARY_SYSTEM_TEMPLATE.format(host_md="{}", peer_block="<PEER>")
 
     # 决策树结构
     assert "决策树" in prompt
     assert "第一步" in prompt and "第二步" in prompt and "第三步" in prompt
-    assert "兜底档" in prompt and "不是默认档" in prompt
+
+    # v4 核心:双向 AND(防回退到 v3 单侧 OR)
+    assert "双向" in prompt
+    assert "AND" in prompt
+    assert "条件 A" in prompt and "条件 B" in prompt
+    # "再观察"是默认落点(防回退到 v3 把它当兜底)
+    assert "默认落点" in prompt or "默认应该落" in prompt
 
     # 三档名仍在
     assert "不合" in prompt
     assert "来电" in prompt
     assert "有点意思再观察" in prompt
 
-    # 关键信号字段(给 LLM 看 private/public signals)
+    # 关键信号字段
     assert "warmth_delta" in prompt
     assert "topic_ref" in prompt
     assert "boundary_hit" in prompt
 
-    # 反向锁:不能再回退到"比例锚"那版
+    # 反向锁:历史错版字面不能出现
     assert "约 30%" not in prompt
     assert "约 50%" not in prompt
     assert "约 20%" not in prompt
+    # v3 错版反向锁
+    assert "优先落'来电'" not in prompt and "优先落\"来电\"" not in prompt
 
 
 async def test_run_summary_for_chat_creates_two_host_summaries(
