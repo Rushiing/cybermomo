@@ -23,6 +23,8 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 
 from main import app
+from src.agent_chat.models import AgentChat, AgentChatMessage
+from src.agent_self.models import AgentConversation, AgentConversationMessage
 from src.auth.models import User, UserProfile
 from src.auth.password import hash_password
 from src.auth.session import create_session_token
@@ -30,6 +32,7 @@ from src.match.models import Match, MatchHook, Matchpoint
 from src.md.models import MdDocument
 from src.shared.db import get_session
 from src.shared.settings import get_settings
+from src.summary.models import Summary
 
 
 @compiles(BigInteger, "sqlite")
@@ -62,6 +65,11 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await conn.run_sync(Match.__table__.create)
         await conn.run_sync(Matchpoint.__table__.create)
         await conn.run_sync(MatchHook.__table__.create)
+        await conn.run_sync(AgentChat.__table__.create)
+        await conn.run_sync(AgentChatMessage.__table__.create)
+        await conn.run_sync(Summary.__table__.create)
+        await conn.run_sync(AgentConversation.__table__.create)
+        await conn.run_sync(AgentConversationMessage.__table__.create)
 
     yield async_sessionmaker(
         bind=engine,
@@ -71,6 +79,11 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     )
 
     async with engine.begin() as conn:
+        await conn.run_sync(AgentConversationMessage.__table__.drop)
+        await conn.run_sync(AgentConversation.__table__.drop)
+        await conn.run_sync(Summary.__table__.drop)
+        await conn.run_sync(AgentChatMessage.__table__.drop)
+        await conn.run_sync(AgentChat.__table__.drop)
         await conn.run_sync(MatchHook.__table__.drop)
         await conn.run_sync(Matchpoint.__table__.drop)
         await conn.run_sync(Match.__table__.drop)
@@ -85,6 +98,11 @@ async def clean_auth_tables(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
     async with session_factory() as session:
+        await session.execute(delete(AgentConversationMessage))
+        await session.execute(delete(AgentConversation))
+        await session.execute(delete(Summary))
+        await session.execute(delete(AgentChatMessage))
+        await session.execute(delete(AgentChat))
         await session.execute(delete(MatchHook))
         await session.execute(delete(Matchpoint))
         await session.execute(delete(Match))
@@ -96,6 +114,11 @@ async def clean_auth_tables(
     yield
 
     async with session_factory() as session:
+        await session.execute(delete(AgentConversationMessage))
+        await session.execute(delete(AgentConversation))
+        await session.execute(delete(Summary))
+        await session.execute(delete(AgentChatMessage))
+        await session.execute(delete(AgentChat))
         await session.execute(delete(MatchHook))
         await session.execute(delete(Matchpoint))
         await session.execute(delete(Match))
