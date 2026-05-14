@@ -1,6 +1,8 @@
 """
 01 · 用户注册 · API 输入输出 schema
 """
+import base64
+import binascii
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -12,6 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #   2. data:image/... base64 内嵌(用户本地上传 + 客户端压缩后)— 长
 # 200KB 上限对 256×256 JPEG quality=0.85 留足空间(实际 ~50-80KB)
 _AVATAR_MAX_LEN = 200_000
+_ALLOWED_AVATAR_DATA_MIME = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
 
 
 class UserProfilePayload(BaseModel):
@@ -33,8 +41,15 @@ class UserProfilePayload(BaseModel):
         if v.startswith("data:image/"):
             # 粗校验 data URL 格式:data:image/<type>;base64,<payload>
             head, _, payload = v.partition(",")
-            if ";base64" not in head or not payload:
+            mime = head.removeprefix("data:").split(";", 1)[0].lower()
+            if mime not in _ALLOWED_AVATAR_DATA_MIME:
+                raise ValueError("avatar_url data URL 只允许 jpeg/png/webp/gif")
+            if ";base64" not in head.lower() or not payload:
                 raise ValueError("data URL 格式不对,必须是 data:image/...;base64,<payload>")
+            try:
+                base64.b64decode(payload, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("data URL payload 必须是合法 base64") from None
             return v
         raise ValueError("avatar_url 必须是 http(s) 链接或 data:image/... base64 内嵌")
 

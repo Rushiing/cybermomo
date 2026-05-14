@@ -133,7 +133,11 @@ async def upsert_profile(
 # ========================================
 
 
-@router.post("/register", response_model=UserMeResponse)
+@router.post(
+    "/register",
+    response_model=UserMeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def register(
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_session),
@@ -187,17 +191,20 @@ async def register(
         UserProfilePayload(nickname=payload.nickname) if payload.nickname else None
     )
 
-    resp = JSONResponse(content=UserMeResponse(
-        id=user.id,
-        email=user.email,
-        username=user.username,
-        google_name=user.google_name,
-        google_avatar_url=user.google_avatar_url,
-        is_adult_confirmed=user.is_adult_confirmed,
-        onboarded_at=user.onboarded_at,
-        created_at=user.created_at,
-        profile=profile_payload,
-    ).model_dump(mode="json"))
+    resp = JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=UserMeResponse(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            google_name=user.google_name,
+            google_avatar_url=user.google_avatar_url,
+            is_adult_confirmed=user.is_adult_confirmed,
+            onboarded_at=user.onboarded_at,
+            created_at=user.created_at,
+            profile=profile_payload,
+        ).model_dump(mode="json"),
+    )
     set_session_cookie(resp, user.id)
     return resp
 
