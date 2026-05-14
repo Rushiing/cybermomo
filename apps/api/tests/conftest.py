@@ -15,7 +15,9 @@ from collections.abc import AsyncIterator, Callable
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import BigInteger, delete, select
+from pgvector.sqlalchemy.vector import VECTOR
+from sqlalchemy import BigInteger, JSON, delete, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
@@ -24,6 +26,8 @@ from main import app
 from src.auth.models import User, UserProfile
 from src.auth.password import hash_password
 from src.auth.session import create_session_token
+from src.match.models import Match, MatchHook, Matchpoint
+from src.md.models import MdDocument
 from src.shared.db import get_session
 from src.shared.settings import get_settings
 
@@ -32,6 +36,16 @@ from src.shared.settings import get_settings
 def _compile_bigint_sqlite(_type: BigInteger, _compiler, **_kw) -> str:
     """让 SQLite 把 BigInteger 当 INTEGER(进程级,见文件头警示)"""
     return "INTEGER"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(_type: JSONB, compiler, **kw) -> str:
+    return compiler.visit_JSON(JSON(), **kw)
+
+
+@compiles(VECTOR, "sqlite")
+def _compile_vector_sqlite(_type: VECTOR, _compiler, **_kw) -> str:
+    return "JSON"
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -44,6 +58,10 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     async with engine.begin() as conn:
         await conn.run_sync(User.__table__.create)
         await conn.run_sync(UserProfile.__table__.create)
+        await conn.run_sync(MdDocument.__table__.create)
+        await conn.run_sync(Match.__table__.create)
+        await conn.run_sync(Matchpoint.__table__.create)
+        await conn.run_sync(MatchHook.__table__.create)
 
     yield async_sessionmaker(
         bind=engine,
@@ -53,6 +71,10 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     )
 
     async with engine.begin() as conn:
+        await conn.run_sync(MatchHook.__table__.drop)
+        await conn.run_sync(Matchpoint.__table__.drop)
+        await conn.run_sync(Match.__table__.drop)
+        await conn.run_sync(MdDocument.__table__.drop)
         await conn.run_sync(UserProfile.__table__.drop)
         await conn.run_sync(User.__table__.drop)
     await engine.dispose()
@@ -63,6 +85,10 @@ async def clean_auth_tables(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[None]:
     async with session_factory() as session:
+        await session.execute(delete(MatchHook))
+        await session.execute(delete(Matchpoint))
+        await session.execute(delete(Match))
+        await session.execute(delete(MdDocument))
         await session.execute(delete(UserProfile))
         await session.execute(delete(User))
         await session.commit()
@@ -70,6 +96,10 @@ async def clean_auth_tables(
     yield
 
     async with session_factory() as session:
+        await session.execute(delete(MatchHook))
+        await session.execute(delete(Matchpoint))
+        await session.execute(delete(Match))
+        await session.execute(delete(MdDocument))
         await session.execute(delete(UserProfile))
         await session.execute(delete(User))
         await session.commit()
