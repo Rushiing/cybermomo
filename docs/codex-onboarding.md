@@ -236,13 +236,187 @@ EOF
 
 ---
 
-## Task C · 扩写 mock 用户 portrait_body(等 A+B 完成后)
+## 第一批 A+B 完成情况(回放 · 2026-05-14)
 
-略,你 A+B 跑完用户会单独通知。
+PR 5(review)和 PR 6(auth tests)已合 main。Claude 在 PR 评论里留了完整 review,
+落地了 3 个 follow-up commit:`4213a1d` / `6bebc7d` / `3267836`。
 
-## Task D · 给 cold_start_seed 加 --verify(等 A+B 完成后)
+**这批做得好的地方**:
+- PR 5 抓到 SVG data URL 安全漏洞,**Claude 没看到**,真 blocker
+- PR 6 顺手把那个漏洞修了(schema MIME 白名单 + base64 validate)
+- test 覆盖完整,SVG 拒绝 case 直接锁住 review 漏洞
 
-略,同上。
+**第二批要避免的事**(本次教训):
+1. **不动 schema 不经过用户** — PR 6 顺手改了 schemas.py + router.py,虽然这次接受了,
+   下次类似情况**先在 PR 评论 ping 一下**再动手。`AGENTS.md §4.1` 那条。
+2. **brief 不准时主动问**,不要按可能错的 brief 写代码(/register 201 vs 200 那条
+   是 Claude brief 写错,如果你提前问一句就少绕一圈)。
+
+---
+
+## Task C · 扩写 20 mock archetype 的 portrait_body
+
+### 现状
+
+`scripts/mock_user_archetypes.py` 里 8 个 archetype(A-H),每个 `_X_BASE` dict 的
+`portrait_body` 字段是 `list[str]`,目前只有 2 句话,总字数 ~50 字。冷启动后这些
+mock 用户会进入真人 onboarding 后的 matching 池,真人看到对方的 portrait 不够立体
+就没法判断是不是想真聊。
+
+### 你要做的
+
+扩写每个 archetype 的 `portrait_body`,**只动这一个字段**,其他不动。
+
+要求:
+1. **保持 `list[str]` 结构** — 分 2-3 段(原来就是 2 段,可加一段不强求)
+2. **总字数 80-120 字** — 不是每段 80 字,是整个 list 拼起来 80-120
+3. **跟 demographic + dialogue 数值对齐**:
+   - 比如 A 沉静观察者 `social_energy=25 / sharing_drive=78` → portrait 要体现
+     "对外不主动,但聊到对的话题会突然话很多"
+   - 比如 D 直率女将 `agency.task_initiation=88 / decision_assertiveness=90` → portrait
+     体现"动手快、判断直接"
+   - 数值我已经写好,你别动,你的活是把数值翻译成人话
+4. **保持现有第二人称"你"调性** — 像 Agent 跟宿主描绘 TA 是谁,**不是**第三人称报告
+5. **避免 AGENTS.md §3.3 提的"AI 装感"用语**(参考 `src/agent_chat/engine.py` 的反"装"
+   硬约束):
+   - 禁用 "总而言之 / 这位朋友 / 综合来看 / 不得不说"
+   - 禁用 "非常 / 十分 / 真的太"
+   - 鼓励:断句、口语、有棱角的判断("XX 你不太行")、半句话("...")
+
+### 边界
+
+- **不引入新字段** — 不要顺手加 portrait_tags 长度、不要加 demographic 字段
+- **不改 dialogue/boundary 数值** — 数值是 Claude 设计的人格锚,改了 portrait 会脱节
+- **variant 之间可以差异化**(比如 A 的 3 个 variant 用不同侧重)但保持骨架性格一致
+- **portrait_title 不动** — 那是已经定的人格标题
+
+### 跑一次确认没坏
+
+```bash
+cd /path/to/cybermomo-app
+python3 scripts/mock_user_archetypes.py
+```
+
+这个脚本独立可执行,会打印 20 人摘要 + 校验 profile 能构造。你跑出来 20 行齐全 + 没
+exception 就 OK。
+
+### 提交方式
+
+```bash
+git checkout -b feat/codex-portrait-bodies
+# 改 scripts/mock_user_archetypes.py(只这一个文件)
+git add scripts/mock_user_archetypes.py
+git commit -m "$(cat <<'EOF'
+feat(seed): 扩写 20 mock archetype 的 portrait_body 到 80-120 字
+
+冷启动 mock 用户的 portrait 之前只有 2 句话约 50 字,真人 onboarding 后看
+matching 池时不够立体。本 commit 在不改 demographic / dialogue 数值的前提下,
+把每个 archetype 的 portrait_body 翻译成 80-120 字的人话。
+
+调性:第二人称、口语、避免"AI 装感"用语(对齐 AGENTS.md §3.3 + agent_chat
+engine 的反装约束)。variant 之间在共同人格锚下做侧重差异。
+
+Co-Authored-By: 不需要
+EOF
+)"
+git push -u origin feat/codex-portrait-bodies
+gh pr create --title "feat(seed): 扩写 20 mock archetype portrait_body" \
+  --body "覆盖 8 archetype × 2-3 variant = 20 人。
+不改 demographic / dialogue 数值。
+本地 \`python3 scripts/mock_user_archetypes.py\` 跑通,20 行齐。
+
+Claude 主审。@用户拍板 merge。"
+```
+
+---
+
+## Task D · 给 cold_start_seed 加 `--verify` 子命令
+
+### 现状
+
+`scripts/cold_start_seed.py` 跑完只能 `psql` 进 DB 手 SELECT 看效果。冷启动后要看
+- 20 个 mock 用户是不是都进库了
+- agent_chat 跑了多少场(预期 30-40 对)
+- summary verdict 分布对不对(`AGENTS.md §3.5` 校准过的目标:来电 ~30% / 再观察 ~50% / 不合 ~20%)
+
+### 你要做的
+
+加 `--verify` 子命令(argparse,不要换 click)。调用方式:
+
+```bash
+cd apps/api
+DATABASE_URL=... PYTHONPATH=. python3 ../../scripts/cold_start_seed.py --verify
+```
+
+期望输出格式(参考,具体数字不强求):
+
+```
+=== Mock Pool Verification ===
+Mock users (is_system_mock=true): 20
+  by archetype: A=3, B=3, C=3, D=3, E=2, F=2, G=2, H=2
+  by gender: female=10, male=8, non_binary=2
+  by age_band: 18-25=4, 25-30=6, 30-35=5, 35-40=3, 40+=2
+
+=== Agent Chats ===
+Total chats involving mock users: 35
+  done_natural: 28 (80%)
+  done_terminated: 5 (14%)
+  running: 2 (6%)  ← 异常,提示用户检查
+  end_reason 分布: natural_wrap=23, turn_limit=5, boundary_hit_铁律=2, ...
+
+=== Summaries ===
+Total summaries involving mock users: 70
+  verdict 来电: 18 (26%)  ← target ~30%
+  verdict 有点意思再观察: 38 (54%)  ← target ~50%
+  verdict 不合: 14 (20%)  ← target ~20%
+
+=== Health ===
+✓ Mock count matches archetypes (20)
+⚠ 2 chats still running (重跑过没?)
+✓ Verdict distribution within tolerance(±10%)
+```
+
+### 实现要求
+
+1. **只读** — 不动 seed 主流程,不写库
+2. **argparse** — `--verify` 跟现有的 `DRY_RUN` / `SKIP_PIPELINE` 环境变量并存,
+   `--verify` 是新增 flag,带这个就只跑 verification 不跑 seed
+3. **复用现有 SessionLocal** — 不要再起新的 engine
+4. **SQL 用 SQLAlchemy 表达式 + func.count** — 不要拼 raw SQL
+5. **archetype 分组**:`username LIKE 'mock_xxx_a%'` 来识别 archetype(看 fixture
+   命名约定 `mock_<name>_<letter><n>`)
+6. **冷启动后跑得动 = 通过** — 不要求 unit test,但请人工跑一次确认输出对
+
+### 边界
+
+- **退出码** — verify 即使发现异常也只是 print,**返 0**;不要因为 verdict 偏差就 exit 1
+- **不引入新依赖** — argparse 是 stdlib
+- **mock 用户判定** — 一律用 `User.is_system_mock == True`,不要用 username 前缀
+  (前缀只用来分 archetype)
+
+### 提交方式
+
+```bash
+git checkout -b feat/codex-seed-verify
+# 改 scripts/cold_start_seed.py
+git add scripts/cold_start_seed.py
+git commit -m "feat(seed): cold_start_seed 加 --verify 子命令"
+git push -u origin feat/codex-seed-verify
+gh pr create --title "feat(seed): cold_start_seed --verify" \
+  --body "新增 verification 子命令,只读输出 mock pool + agent_chat + summary
+verdict 分布。冷启动后用来确认 prompt 校准效果。
+
+Claude 主审。@用户拍板 merge。"
+```
+
+---
+
+## 后续 batch
+
+C+D 完成后,用户会决定下一批。可能方向:
+- 给 `apps/web` 补 E2E test(Playwright)
+- 给 `src/agent_chat` / `summary` 模块写单测(LLM 全部 mock,锁 prompt 行为)
+- 把 `seed_demo_users.py` 老脚本整合进 `cold_start_seed.py`(技术债)
 
 ---
 
