@@ -112,17 +112,35 @@ async def _create_summary_bundle(db: AsyncSession, *, with_messages: bool = True
     return chat, users[0], users[1]
 
 
-def test_summary_system_template_keeps_verdict_distribution_anchors():
+def test_summary_system_template_uses_decision_tree_not_distribution_quota():
+    """verdict prompt 是决策树(按顺序排除"不合"→"来电"→"再观察"),不再用比例锚
+
+    历史背景:第一版 prompt 没分布锚,跑出来清一色"来电"(过度乐观);第二版
+    加了"30%/50%/20%"比例锚 + "AI 互捧"警告,跑出来清一色"再观察"(过度保守)。
+    第三版改成决策树:**"再观察"是兜底档不是默认档**,必须先排除"不合"和"来电"
+    才能落"再观察"。本 test 锁住决策树的关键字面,防止再回退到比例锚那一版。
+    """
     prompt = SUMMARY_SYSTEM_TEMPLATE.format(host_md="{}", peer_block="<PEER>")
 
-    assert "verdict 分布参考" in prompt
-    assert "来电" in prompt and "约 30%" in prompt
-    assert "有点意思再观察" in prompt and "约 50%" in prompt
-    assert "不合" in prompt and "约 20%" in prompt
-    assert "礼貌性回应" in prompt
-    assert "不算" in prompt
-    assert "private_signals" in prompt
+    # 决策树结构
+    assert "决策树" in prompt
+    assert "第一步" in prompt and "第二步" in prompt and "第三步" in prompt
+    assert "兜底档" in prompt and "不是默认档" in prompt
+
+    # 三档名仍在
+    assert "不合" in prompt
+    assert "来电" in prompt
+    assert "有点意思再观察" in prompt
+
+    # 关键信号字段(给 LLM 看 private/public signals)
     assert "warmth_delta" in prompt
+    assert "topic_ref" in prompt
+    assert "boundary_hit" in prompt
+
+    # 反向锁:不能再回退到"比例锚"那版
+    assert "约 30%" not in prompt
+    assert "约 50%" not in prompt
+    assert "约 20%" not in prompt
 
 
 async def test_run_summary_for_chat_creates_two_host_summaries(
