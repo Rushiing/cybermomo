@@ -49,6 +49,13 @@ export default function AvatarUpload({
       setError("只能上传图片")
       return
     }
+    // SVG 是 XML 不是位图,canvas 渲染行为不一致 + 内嵌 <script> / 外链有安全风险
+    // (虽然 <img src> 上下文多数浏览器禁脚本,但作为用户可控 data URL 不值得这个风险)
+    // 后端 schemas.py 的 _ALLOWED_AVATAR_DATA_MIME 也不收 svg,这里前端先挡 UX 更友好
+    if (file.type === "image/svg+xml") {
+      setError("不支持 SVG,换 JPG / PNG / WebP / GIF")
+      return
+    }
     setError(null)
     setBusy(true)
     try {
@@ -120,7 +127,7 @@ export default function AvatarUpload({
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/webp,image/gif"
           onChange={onPick}
           className="hidden"
         />
