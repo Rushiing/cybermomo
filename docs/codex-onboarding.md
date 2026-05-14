@@ -411,19 +411,327 @@ Claude 主审。@用户拍板 merge。"
 
 ---
 
+---
+
+## Task E · prompt 工程 + 平台铁律的 test 安全网
+
+### 背景
+
+冷启动 5 件事已经做完(prompt 校准 + peer demographic 注入 + 双轨认证 + mock seed)。
+但**prompt 工程 + 平台铁律相关的代码完全没 test 覆盖**,真人内测开始后任何回归都
+不好排查。Claude 评估后判断:**这块 ROI 最高,真出事比补测试贵 10x**。
+
+不让 CodeX 测的(已划出去):
+- LLM 真实输出质量(只能人工跑)
+- Playwright E2E(后续 batch)
+- match 算法(优先级低)
+- prompt 字符串完整 snapshot(脆弱,改 prompt 就重 snapshot)— **只断言关键短语存在**
+
+### 拆 2 个 PR
+
+#### **PR E1** — 纯函数 / 数据校验(高 ROI,无 LLM 依赖)
+
+| 文件 | 范围 | 优先级 |
+|---|---|---|
+| `tests/test_peer_prompt.py` | `format_peer_block` 5 gender × age 组合 | 🔥 最高 |
+| `tests/test_desensitize.py` | hook 输出**不含** .md 原文(§3.4 硬墙) | 🔥 最高 |
+
+#### **PR E2** — LLM mock(共用 fixture)
+
+| 文件 | 范围 | 优先级 |
+|---|---|---|
+| `tests/test_agent_chat_prompts.py` | PLATFORM_SYSTEM + TURN_PROMPT + direction_hint 注入 | 高 |
+| `tests/test_summary_prompts.py` | SUMMARY_SYSTEM 含 verdict 分布锚 + 双 host 简报 | 高 |
+| `tests/test_agent_self_peer_resolver.py` | 3 种 scope 解 peer_user_id | 中 |
+
+---
+
+### PR E1 · 详细 brief
+
+#### `tests/test_peer_prompt.py`
+
+测 `src/shared/peer_prompt.py::format_peer_block`(纯函数)。**这是回归保护**:
+确保"对方女不被叫哥们儿 / 非二元不带性别词 / 跨年龄段不用同辈词"这些硬约束不被
+后续改 prompt 时无意中破坏。
+
+必覆盖 case(对照 `peer_prompt.py` 现有 5 个分支):
+
+1. **female 同龄**:`peer_gender="female", peer_age="25-30", host_age="25-30"` →
+   输出包含**字面字符串**`"禁用"`和 `"哥们儿"`,不含 `"姐妹"` 之前的反义词。
+
+2. **male 同龄**:`male / 25-30 / 25-30` → 输出含 `"可以用'哥们儿"`,不含 `"禁用"`。
+
+3. **male 跨年龄段**:`male / 40+ / 18-25` → 输出含 `"跨年龄段"`,**不能**含 "可以用'哥们儿"。
+
+4. **non_binary**:`non_binary / 30-35` → 输出含 `"@nickname"` 或 `"TA"`,**不能**
+   含 "哥们儿 / 姐妹 / 兄弟" 任一(用 `assert all(w not in result for w in ...)`)。
+
+5. **prefer_not_to_say**:输出走"默认走 @nickname"分支。
+
+6. **全 NULL 字段**:`peer_nickname=None, peer_age=None, peer_gender=None` →
+   输出含 `"NULL 字段多"` 或回退 `"user_X"`。
+
+7. **nickname=None 但 peer_user_id 有值**:输出含 `"user_<id>"` 占位。
+
+8. **peer_mbti 是 None**:不应 raise,且输出里不出现 "MBTI:"。
+
+9. **跨年龄段判定边界**:差 2 档(`18-25` vs `30-35`)算跨年龄段,差 1 档(`25-30` vs `30-35`)
+   不算。可以用 `_age_gap_is_large` 间接测,但更稳是断言 format 输出关键短语。
+
+10. **mbti = None 且 peer_user_id 有值**:不崩,输出不含 "MBTI:" 行。
+
+**实现要求**:
+- **不需要 DB / async** — 纯函数测试,用 `def` 不用 `async def`
+- 断言**关键字面字符串存在 / 不存在**,不要做整段 snapshot 比对(脆弱)
+- 输出全部 print 一下方便人工目视检查
+
+#### `tests/test_desensitize.py`
+
+测 `src/match/desensitize.py` 的**铁律级**保护:hook 输出不能包含 .md 原文。
+
+这是 **§3.4 平台铁律**对应的硬墙 — 用户原话:"这个暴露,太吓人了,跟直接大街上脱了别人衣服似的"。
+
+必覆盖 case:
+
+1. **`_extract_safe_profile_summary` 不暴露 raw_answers**:
+   - 构造一个含 `raw_answers = {"E1": {"option_text": "我喜欢深夜独自读小说"}}` 的 profile
+   - 跑 `_extract_safe_profile_summary(profile)` → assert 返回的 dict 序列化成 json 后**不含** "深夜独自读小说"
+   - 跑 `_bucketize_dimensions` 同样断言
+
+2. **`_extract_safe_profile_summary` 不暴露 portrait.body 原文**:
+   - profile 含 `portrait.body = ["你是个慢热但深度的人"]`
+   - 返回 dict 不含 "慢热但深度"
+
+3. **`_bucketize_dimensions` 数值正确分档**:
+   - `dialogue.social_energy = 80` → "高"
+   - `social_energy = 50` → "中"
+   - `social_energy = 20` → "低"
+   - 边界:`67` → "高",`66` → "中",`34` → "低",`35` → "中"
+
+4. **`_bucketize_dimensions` 跳过 None 值**:
+   - profile 含 `dialogue.sharing_drive = None` → 输出 dict 不含 sharing_drive 键
+
+5. **`_parse_loose_json` 容忍 markdown 围栏**:
+   - 输入 ` ```json\n{"x":1}\n``` ` → 返回 `{"x": 1}`
+   - 输入 `{"x":1}` 不带围栏 → 也能解析
+   - 输入 `garbage` → 返回 `None`(不抛)
+
+6. **`run_desensitize_for_match` 端到端**(LLM mock):
+   - 构造 fake Match + Matchpoint + 双方 MdDocument
+   - mock `llm_chat` 返回固定 JSON(含 hooks_for_a + hooks_for_b)
+   - 跑完后断言 DB 里写入了 MatchHook 行
+   - **关键断言**:写入的 hook_text 不含 profile_json 里 raw_answers 任何 option_text 字面
+     (用 substring 比对,失败时打印是哪个 hook 漏了哪段 .md 原文)
+
+7. **LLM 返回非法 JSON 时优雅退化**:
+   - mock 返回 `"this is not json"` → `run_desensitize_for_match` 不抛,
+     只是 `match.status` 标 desensitize_failed 或类似(看实现)
+
+**实现要求**:
+- 用 conftest 里现成的 SQLite + ASGI fixture
+- LLM mock 用 `monkeypatch.setattr("src.match.desensitize.llm_chat", ...)`
+- 测 §3.4 那条**字面 substring 比对**是核心,必须有
+
+#### PR E1 提交方式
+
+```bash
+git checkout -b feat/codex-prompt-test-net-e1
+# 写 tests/test_peer_prompt.py + tests/test_desensitize.py
+pytest tests/test_peer_prompt.py tests/test_desensitize.py  # 本地跑过
+git add apps/api/tests/test_peer_prompt.py apps/api/tests/test_desensitize.py
+git commit -m "feat(tests): peer_prompt + desensitize 安全网"
+git push -u origin feat/codex-prompt-test-net-e1
+gh pr create --title "feat(tests): peer_prompt 5 称呼锚 + desensitize §3.4 铁律硬墙" \
+  --body "PR E1 of 2 · 纯函数 / 数据校验,无 LLM 真调用。
+  
+覆盖:
+- peer_prompt: <X> case,锁住 5 gender × age 称呼锚 + NULL 降级
+- desensitize: <Y> case,核心是 hook_text **不含 .md raw_answers 字面** 的 substring 比对
+
+下一个 PR E2 会覆盖 agent_chat / summary / agent_self prompt 渲染。
+
+Claude 主审。@用户拍板 merge。"
+```
+
+---
+
+### PR E2 · 详细 brief(E1 合完再开)
+
+#### `tests/test_agent_chat_prompts.py`
+
+测 `src/agent_chat/engine.py` 的 prompt 拼装 + LLM 调用边界。不验证 LLM 输出质量,
+只验证**我们传给 LLM 的 prompt 包含该有的关键短语 + 不该回退的硬约束还在**。
+
+必覆盖 case:
+
+1. **PLATFORM_SYSTEM 含反"装"硬约束关键短语**:
+   - 包含 `"禁用开场套话"` / `"禁用结尾甩问"` / `"禁用 AI 客气助词"`
+   - 包含 `"真人审"` / `"两个 AI 在客气地互相恭维"`
+   - 不含 `"很高兴认识你"`(防误把禁用词塞反方向)
+
+2. **TURN_PROMPT_TEMPLATE 渲染后含 peer_block**:
+   - mock `format_peer_block` 返 `"<MOCK_PEER_BLOCK>"`
+   - 跑一轮拼 prompt → assert prompt 里有 `"<MOCK_PEER_BLOCK>"`
+
+3. **`run_agent_chat` direction_hint 只注入 target_user_id 那一侧**:
+   - mock `llm_chat` 拿到 prompt 后写入 list,后断言
+   - turn 1(user_a)有 direction → prompt 含 `"宿主新方向指示"`
+   - turn 2(user_b)无 direction → prompt 不含
+   - direction_target_user_id 切换 → 注入方向反过来
+
+4. **`avoid_topic_refs` 拼进 AVOID_BLOCK_TEMPLATE**:
+   - 传 `["topic_a", "topic_b"]` → prompt 含 `"再派一次"` + `"topic_a"` + `"topic_b"`
+   - 不传 → prompt 不含 `"再派一次"`
+
+5. **LLM 返回 boundary_hit='铁律' → end_reason='boundary_hit_铁律'**:
+   - mock 让第 1 轮返回 `{"private_signals":{"boundary_hit":"铁律"},...}`
+   - 跑完 chat.status == "done_terminated" + end_reason 含 "铁律"
+
+6. **双方连续 wrap → done_natural**:
+   - mock 第 3、4 轮都返回 `intent="wrap"` → chat.end_reason == "natural_wrap"
+
+7. **没 hooks 直接终止**:
+   - 不创建 MatchHook → chat.status="done_terminated", end_reason="no_hooks"
+
+8. **缺一方 profile → 终止**:
+   - 只创建一方 MdDocument → end_reason="missing_profile"
+
+**实现要求**:
+- LLM mock 用 `monkeypatch.setattr("src.agent_chat.engine.llm_chat", ...)`
+- mock 的 llm_chat 用 `AsyncMock`,返回固定结构(注意 `resp.text` 字段)
+- fixture 帮忙构造 Match + MatchHook + 双方 MdDocument + UserProfile,
+  考虑放 `tests/conftest.py` 共用
+
+#### `tests/test_summary_prompts.py`
+
+测 `src/summary/engine.py`:
+
+1. **SUMMARY_SYSTEM_TEMPLATE 含 verdict 分布锚**:
+   - 渲染后 prompt 含 `"来电(约 30%)"` / `"有点意思再观察(约 50%)"` / `"不合(约 20%)"`
+   - 含 `"礼貌性回应"` + `"不算来电"`
+   - 含 `"private_signals"` 提示看 warmth_delta 走势
+
+2. **`run_summary_for_chat` 双 host 各产一份 summary**:
+   - mock llm_chat 返合法 JSON
+   - 跑完 DB 里有 2 行 Summary,host_user_id 一个 a 一个 b
+
+3. **verdict 不在三档 → fallback "有点意思再观察"**:
+   - mock 返 `{"verdict":"非常喜欢",...}` → DB 里写的是 "有点意思再观察"
+
+4. **recommended_action 不在三档 → fallback "再派一次"**:
+   - mock 返 `{"recommended_action":"立即结婚",...}` → DB 写 "再派一次"
+
+5. **peer_block 被注入 SYSTEM**:
+   - mock format_peer_block 返 `"<MOCK_PEER>"` → SYSTEM prompt 含
+
+6. **空 messages → 跳过(返空 list)**:
+   - 没创建 AgentChatMessage → run_summary_for_chat 返 `[]`
+
+7. **LLM 抛错 → 跳过该 host 不影响另一个**:
+   - mock 第一次抛 Exception,第二次正常 → DB 只有 1 个 Summary,不抛到上游
+
+#### `tests/test_agent_self_peer_resolver.py`
+
+测 `src/agent_self/engine.py::_resolve_peer_user_id` + `_load_peer_block`:
+
+1. **scope='general' → None**
+
+2. **scope='revisit' + context_refs={"peer_user_id": 5} → 5**
+
+3. **scope='plaza' + context_refs={"target_user_id": 8} → 8**
+
+4. **scope='room' + context_refs={"agent_chat_id": 99}**:
+   - 构造 AgentChat(id=99, match_id=42) + Match(id=42, user_a=1, user_b=2)
+   - conversation.host_user_id = 1 → 返回 2
+   - conversation.host_user_id = 2 → 返回 1
+
+5. **scope='room' 但 agent_chat_id 不存在 → None**(不抛)
+
+6. **scope='room' 但 Match 被删 → None**(不抛)
+
+7. **`_load_peer_block` 整合测试**:
+   - 上面 scenario 4 → 调用 format_peer_block 时正确传入 peer 的 UserProfile
+
+#### PR E2 提交方式
+
+```bash
+git checkout -b feat/codex-prompt-test-net-e2
+# 写 3 个 test 文件
+pytest tests/test_agent_chat_prompts.py tests/test_summary_prompts.py tests/test_agent_self_peer_resolver.py
+git add apps/api/tests/test_agent_chat_prompts.py apps/api/tests/test_summary_prompts.py apps/api/tests/test_agent_self_peer_resolver.py
+git commit -m "feat(tests): agent_chat / summary / agent_self prompt 渲染安全网"
+git push -u origin feat/codex-prompt-test-net-e2
+gh pr create --title "feat(tests): prompt 渲染 + scope peer resolver" \
+  --body "PR E2 of 2 · LLM mock,只测我们传给 LLM 的 prompt 内容。
+
+覆盖:
+- agent_chat: PLATFORM_SYSTEM 反装短语 + TURN peer_block 注入 + direction_hint 单向
+- summary: SUMMARY 分布锚 + 双 host 产出 + verdict fallback
+- agent_self: 3 种 scope 解 peer + room scope JOIN chat→match
+
+Claude 主审。@用户拍板 merge。"
+```
+
+---
+
+### 共用注意点
+
+**SQL fixture 扩展**:目前 `tests/conftest.py` 只 create 了 `User / UserProfile` 表。
+E1 / E2 需要扩展支持 `MdDocument / Match / MatchHook / Matchpoint / AgentChat /
+AgentChatMessage / Summary / AgentConversation`。建议:
+1. 在 `conftest.py` 的 `session_factory` fixture 里**集中**追加所有需要的表
+2. JSONB / Vector 字段在 SQLite 上可能炸 — JSONB 自动降级成 SQLite JSON 通常 OK,
+   但 pgvector 的 `Vector(1024)` 在 SQLite 没驱动 → 如果遇到这种,改用 mock 或
+   `pytest.importorskip("psycopg2")` skip 该 test。**遇到再说,不要提前加复杂度**
+
+**LLM mock 范式**:
+```python
+from unittest.mock import AsyncMock
+
+class FakeLLMResp:
+    def __init__(self, text: str):
+        self.text = text
+
+monkeypatch.setattr(
+    "src.agent_chat.engine.llm_chat",
+    AsyncMock(return_value=FakeLLMResp('{"intent":"share",...}')),
+)
+```
+
+**断言风格**:
+- ✓ `assert "禁用开场套话" in system_prompt`
+- ✓ `assert all(banned not in result for banned in ["哥们儿", "兄弟", "姐妹"])`
+- ✗ `assert system_prompt == expected_full_string`(脆弱,改 prompt 就重写)
+
+**字面短语清单**(给 CodeX 用来 grep 当前 prompt):
+
+agent_chat PLATFORM_SYSTEM 必含:
+- `"反"装"硬约束"` / `"禁用开场套话"` / `"禁用结尾甩问"` / `"禁用 AI 客气助词"`
+- `"打断、跳话题、半句话"` / `"两个 AI 在客气地互相恭维"`
+
+summary SUMMARY_SYSTEM 必含:
+- `"verdict 分布参考"` / `"来电(约 30%)"` / `"有点意思再观察(约 50%)"` / `"不合(约 20%)"`
+- `"礼貌性回应"` / `"不算来电"`
+
+agent_self PLATFORM_SYSTEM_BASE 必含:
+- `"朋友式八卦关系"` / `"参谋"` / `"执行键在宿主手上"`
+
+---
+
 ## 后续 batch
 
-C+D 完成后,用户会决定下一批。可能方向:
-- 给 `apps/web` 补 E2E test(Playwright)
-- 给 `src/agent_chat` / `summary` 模块写单测(LLM 全部 mock,锁 prompt 行为)
+E1 + E2 完成后可能方向:
+- 给 `apps/web` 补 E2E test(Playwright,大改动单独 batch)
 - 把 `seed_demo_users.py` 老脚本整合进 `cold_start_seed.py`(技术债)
+- 实现一些遗留 follow-up(google_name 字段重命名为 display_name 等)
 
 ---
 
 ## 协作纪律提醒
 
 - PR 上 Claude 会给 review 评论,**你回复要在 PR 里完成**,不要单独发消息绕开
-- 改动如果触到 prompt / IA / schema,**先 hold,问用户**
+- 改动如果触到 prompt / IA / schema,**先 hold,问用户**(上批教训)
+- brief 不准时主动问,不要按可能错的 brief 闷头写(上批教训)
 - 不确定的事用 `gh pr comment` 抛出来,不要自己假设
 - review 用文字,不灌 emoji
 
