@@ -15,7 +15,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from src.agent_chat.models import AgentChat
 from src.auth.models import User, UserProfile
@@ -25,6 +25,7 @@ from src.match.pipeline import run_full_pipeline_for_user
 from src.md.models import MdDocument
 from src.seed.archetypes import MOCK_USERS, build_profile_for
 from src.shared.db import SessionLocal
+from src.summary.engine import run_summary_for_chat
 from src.summary.models import Summary
 
 
@@ -212,6 +213,109 @@ async def run_pipeline_for_all_mock_users(
 
     _PIPELINE_JOB.update(
         status="done" if not _PIPELINE_JOB["errors"] else "failed",
+        finished_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+# ========================================
+# Redo summaries(prompt 校准后只重跑 summary,不重跑 agent_chat)
+# ========================================
+#
+# 用途:调 SUMMARY_SYSTEM_TEMPLATE 后,在同一批 mock 对话 utterance 上重新评估
+# verdict,直接对比新旧 prompt 效果(不用重跑 30 分钟的 agent_chat)。
+#
+# 行为:
+#   1. 找出所有涉及 mock 用户的 AgentChat(status=done_natural)
+#   2. 删除这些 chat 关联的旧 Summary
+#   3. 用当前 SUMMARY_SYSTEM_TEMPLATE 重新生成 summary
+#
+# 不动 AgentChat / AgentChatMessage — 这些是真实发生过的对话历史,保留不变。
+
+_REDO_SUMMARIES_JOB: dict[str, Any] = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "target_chat_count": 0,
+    "processed_chat_count": 0,
+    "current_chat_id": None,
+    "summaries_created": 0,
+    "errors": [],
+}
+
+
+def _reset_redo_state(target_count: int) -> None:
+    _REDO_SUMMARIES_JOB.update(
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None,
+        target_chat_count=target_count,
+        processed_chat_count=0,
+        current_chat_id=None,
+        summaries_created=0,
+        errors=[],
+    )
+
+
+def get_redo_summaries_job_state() -> dict[str, Any]:
+    return dict(_REDO_SUMMARIES_JOB)
+
+
+def is_redo_summaries_running() -> bool:
+    return _REDO_SUMMARIES_JOB["status"] == "running"
+
+
+async def redo_summaries_for_mock_pool() -> None:
+    """重跑所有 mock 涉及 chat 的 summary。BackgroundTask 调用,不抛。"""
+    try:
+        async with SessionLocal() as db:
+            stmt = (
+                select(AgentChat.id)
+                .join(Match, AgentChat.match_id == Match.id)
+                .where(_mock_chat_filter(), AgentChat.status == "done_natural")
+                .order_by(AgentChat.id)
+            )
+            chat_ids = list((await db.execute(stmt)).scalars().all())
+    except Exception as e:
+        _REDO_SUMMARIES_JOB.update(
+            status="failed",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            errors=[{"chat_id": None, "error": f"list_chats: {type(e).__name__}: {e}"}],
+        )
+        return
+
+    _reset_redo_state(len(chat_ids))
+
+    for chat_id in chat_ids:
+        _REDO_SUMMARIES_JOB["current_chat_id"] = chat_id
+        try:
+            async with SessionLocal() as db:
+                # 1) 删旧 summary(only mock-pool 的,不动真人数据)
+                await db.execute(
+                    delete(Summary).where(Summary.agent_chat_id == chat_id)
+                )
+                await db.commit()
+
+                # 2) 拉 chat
+                chat = (await db.execute(
+                    select(AgentChat).where(AgentChat.id == chat_id)
+                )).scalar_one_or_none()
+                if chat is None:
+                    continue
+
+                # 3) 用当前 prompt 重跑 summary
+                new_summaries = await run_summary_for_chat(db, chat=chat)
+                _REDO_SUMMARIES_JOB["summaries_created"] += len(new_summaries)
+        except Exception as e:
+            _REDO_SUMMARIES_JOB["errors"].append({
+                "chat_id": chat_id,
+                "error": f"{type(e).__name__}: {e}",
+            })
+        finally:
+            _REDO_SUMMARIES_JOB["processed_chat_count"] += 1
+            _REDO_SUMMARIES_JOB["current_chat_id"] = None
+
+    _REDO_SUMMARIES_JOB.update(
+        status="done" if not _REDO_SUMMARIES_JOB["errors"] else "failed",
         finished_at=datetime.now(timezone.utc).isoformat(),
     )
 

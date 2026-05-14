@@ -27,8 +27,11 @@ from src.human_chat.observation import run_observation_for_session
 from src.match.pipeline import run_full_pipeline_for_user
 from src.seed.operations import (
     get_pipeline_job_state,
+    get_redo_summaries_job_state,
     insert_all_mock_users,
     is_pipeline_running,
+    is_redo_summaries_running,
+    redo_summaries_for_mock_pool,
     run_pipeline_for_all_mock_users,
     verify_all,
 )
@@ -261,6 +264,53 @@ async def seed_pipeline_status(
     """
     _require_admin(x_admin_secret)
     return get_pipeline_job_state()
+
+
+@router.post("/seed/redo-summaries")
+async def seed_redo_summaries(
+    background_tasks: BackgroundTasks,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    Prompt 校准后:只用当前 SUMMARY_SYSTEM_TEMPLATE 在**同一批已有 mock chat**
+    上重新生成 summary,不重跑 agent_chat。用于直接对比新旧 prompt 效果。
+
+    行为:
+      - 找所有涉及 mock 用户的 AgentChat(status=done_natural)
+      - 删除这些 chat 关联的旧 Summary
+      - 用当前 prompt 重新跑 run_summary_for_chat
+      - AgentChat / AgentChatMessage 保留不动(真实历史)
+
+    立即返 202 + job 概况。轮询 GET /seed/redo-status 看进度。
+    并发保护:已在跑返 409。
+    """
+    _require_admin(x_admin_secret)
+
+    if is_redo_summaries_running():
+        existing = get_redo_summaries_job_state()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                f"redo-summaries 已在跑(processed={existing['processed_chat_count']}/"
+                f"{existing['target_chat_count']}),GET /seed/redo-status 看进度"
+            ),
+        )
+
+    background_tasks.add_task(redo_summaries_for_mock_pool)
+    return {
+        "ok": True,
+        "accepted": True,
+        "hint": "GET /api/admin/seed/redo-status 看进度;~15-25 分钟,看 chat 数",
+    }
+
+
+@router.get("/seed/redo-status")
+async def seed_redo_status(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """返回 redo-summaries job 的进程级 state(跟 /seed/status 独立)"""
+    _require_admin(x_admin_secret)
+    return get_redo_summaries_job_state()
 
 
 @router.get("/seed/verify")
