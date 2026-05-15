@@ -335,3 +335,157 @@ async def seed_verify(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"verify 失败: {type(e).__name__}: {e}",
         )
+
+
+# ========================================
+# 临时:Voice audit · prompt "人机味儿" 审计样本(整段可删)
+# ========================================
+
+
+@router.get("/voice-audit-sample")
+async def voice_audit_sample(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    一次性 read-only:7 类 LLM 出口近期样本,给 prompt 工程做"人机味儿"审计。
+    返回大 JSON,字段:
+      agent_chat_messages / summary_after_chat / prebriefing / observation /
+      agent_self_assistant / chat_callouts / match_hooks
+    用完想删,把整段(本注释 + 这个函数)cut 掉即可,顶部 imports 不动。
+    """
+    _require_admin(x_admin_secret)
+
+    from sqlalchemy import desc
+    from src.agent_chat.models import AgentChat, AgentChatMessage
+    from src.agent_self.models import AgentConversationMessage
+    from src.human_chat.models import ChatCallout
+    from src.match.models import MatchHook
+    from src.summary.models import Summary
+
+    def _trunc(s, n=400):
+        s = (s or "").strip()
+        return s if len(s) <= n else s[:n] + "…"
+
+    def _hl(items):
+        return [
+            (i.get("text") or "").strip()
+            for i in (items or [])
+            if isinstance(i, dict) and i.get("text")
+        ]
+
+    # 1. agent_chat 互聊全量(反"装"硬约束已校准 · 反向基线)
+    chats = (
+        await db.execute(
+            select(AgentChat)
+            .where(AgentChat.status.in_(["done_natural", "done_terminated"]))
+            .order_by(desc(AgentChat.id))
+            .limit(5)
+        )
+    ).scalars().all()
+    chats_out = []
+    for chat in chats:
+        msgs = (
+            await db.execute(
+                select(AgentChatMessage)
+                .where(AgentChatMessage.agent_chat_id == chat.id)
+                .order_by(AgentChatMessage.turn)
+            )
+        ).scalars().all()
+        chats_out.append({
+            "chat_id": chat.id,
+            "status": chat.status,
+            "end_reason": chat.end_reason,
+            "messages": [
+                {
+                    "turn": m.turn,
+                    "speaker": m.speaker_user_id,
+                    "intent": m.intent,
+                    "warmth_delta": (m.private_signals or {}).get("warmth_delta"),
+                    "disclosure": (m.private_signals or {}).get("disclosure_level"),
+                    "utterance": _trunc(m.utterance, 400),
+                }
+                for m in msgs
+            ],
+        })
+
+    async def _take_summaries(stype: str, n: int):
+        rows = (
+            await db.execute(
+                select(Summary)
+                .where(Summary.summary_type == stype)
+                .order_by(desc(Summary.id))
+                .limit(n)
+            )
+        ).scalars().all()
+        return [
+            {
+                "id": s.id,
+                "verdict": s.verdict,
+                "host": s.host_user_id,
+                "recommended_action": s.recommended_action,
+                "highlights": [_trunc(t, 350) for t in _hl(s.highlights)],
+                "risks": [_trunc(t, 350) for t in _hl(s.risks)],
+            }
+            for s in rows
+        ]
+
+    summary_rows = await _take_summaries("agent_chat", 10)
+    prebriefing_rows = await _take_summaries("pre_briefing", 5)
+    observation_rows = await _take_summaries("human_chat_observation", 5)
+
+    agent_self_rows = (
+        await db.execute(
+            select(AgentConversationMessage)
+            .where(AgentConversationMessage.role == "assistant")
+            .order_by(desc(AgentConversationMessage.id))
+            .limit(10)
+        )
+    ).scalars().all()
+
+    callout_rows = (
+        await db.execute(
+            select(ChatCallout).order_by(desc(ChatCallout.id)).limit(5)
+        )
+    ).scalars().all()
+
+    hook_rows = (
+        await db.execute(
+            select(MatchHook).order_by(desc(MatchHook.id)).limit(10)
+        )
+    ).scalars().all()
+
+    return {
+        "agent_chat_messages": chats_out,
+        "summary_after_chat": summary_rows,
+        "prebriefing": prebriefing_rows,
+        "observation": observation_rows,
+        "agent_self_assistant": [
+            {
+                "conversation_id": m.conversation_id,
+                "turn": m.turn,
+                "content": _trunc(m.content, 600),
+            }
+            for m in agent_self_rows
+        ],
+        "chat_callouts": [
+            {
+                "id": c.id,
+                "session_id": c.session_id,
+                "prompt": _trunc(c.callout_prompt, 200),
+                "response": _trunc(c.callout_response, 600),
+            }
+            for c in callout_rows
+        ],
+        "match_hooks": [
+            {
+                "match_id": h.match_id,
+                "target_user_id": h.target_user_id,
+                "category": h.category,
+                "match_type": h.match_type,
+                "sensitivity_level": h.sensitivity_level,
+                "hook_text": _trunc(h.hook_text, 400),
+            }
+            for h in hook_rows
+        ],
+    }
