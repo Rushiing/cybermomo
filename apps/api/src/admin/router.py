@@ -1053,3 +1053,166 @@ async def voice_audit_rerun_prebriefing(
             "recommended_action": parsed.get("recommended_action"),
         },
     }
+
+
+# ========================================
+# 临时:Voice audit dry-run · 用当前 prompt 重跑某 agent_chat summary(整段可删)
+# ========================================
+
+
+@router.post("/voice-audit-rerun-summary")
+async def voice_audit_rerun_summary(
+    summary_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用当前 SUMMARY_SYSTEM_TEMPLATE 重跑某 summary_id(必须 type='agent_chat'),
+    **不写库**,返回 old(DB 现存) + new(LLM 新输出) 给 prompt 工程做 A/B。
+
+    用法:
+      POST /api/admin/voice-audit-rerun-summary?summary_id=263
+    """
+    _require_admin(x_admin_secret)
+
+    import json as _json
+    from src.agent_chat.models import AgentChat, AgentChatMessage
+    from src.auth.models import UserProfile
+    from src.llm.gateway import llm_chat
+    from src.llm.types import Message
+    from src.match.desensitize import _parse_loose_json
+    from src.match.models import Match
+    from src.md.models import MdDocument
+    from src.shared.peer_prompt import format_peer_block
+    from src.summary.engine import (
+        SUMMARY_SYSTEM_TEMPLATE,
+        USER_PAYLOAD_TEMPLATE,
+    )
+    from src.summary.models import Summary
+
+    summary = (
+        await db.execute(select(Summary).where(Summary.id == summary_id))
+    ).scalar_one_or_none()
+    if summary is None:
+        raise HTTPException(404, detail=f"summary {summary_id} not found")
+    if summary.summary_type != "agent_chat":
+        raise HTTPException(
+            409,
+            detail=f"summary {summary_id} 不是 agent_chat(type={summary.summary_type})",
+        )
+    if summary.agent_chat_id is None:
+        raise HTTPException(409, detail=f"summary {summary_id} 缺 agent_chat_id")
+
+    chat = (
+        await db.execute(
+            select(AgentChat).where(AgentChat.id == summary.agent_chat_id)
+        )
+    ).scalar_one_or_none()
+    if chat is None:
+        raise HTTPException(404, detail="agent_chat 已删")
+
+    match = (
+        await db.execute(select(Match).where(Match.id == chat.match_id))
+    ).scalar_one_or_none()
+    if match is None:
+        raise HTTPException(409, detail="match 缺")
+
+    host_user_id = summary.host_user_id
+    peer_user_id = (
+        match.user_b_id if host_user_id == match.user_a_id else match.user_a_id
+    )
+
+    profile = (
+        await db.execute(
+            select(MdDocument).where(
+                MdDocument.user_id == host_user_id,
+                MdDocument.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+    messages = (
+        await db.execute(
+            select(AgentChatMessage)
+            .where(AgentChatMessage.agent_chat_id == chat.id)
+            .order_by(AgentChatMessage.turn)
+        )
+    ).scalars().all()
+    if not messages:
+        raise HTTPException(409, detail="agent_chat 无 messages")
+
+    user_profile_rows = (
+        await db.execute(
+            select(UserProfile).where(
+                UserProfile.user_id.in_([host_user_id, peer_user_id])
+            )
+        )
+    ).scalars().all()
+    up_by_user = {up.user_id: up for up in user_profile_rows}
+    host_up = up_by_user.get(host_user_id)
+    peer_up = up_by_user.get(peer_user_id)
+    peer_block = format_peer_block(
+        peer_nickname=peer_up.nickname if peer_up else None,
+        peer_user_id=peer_user_id,
+        peer_age_band=peer_up.age_band if peer_up else None,
+        peer_gender=peer_up.gender if peer_up else None,
+        peer_mbti=peer_up.mbti if peer_up else None,
+        host_age_band=host_up.age_band if host_up else None,
+    )
+
+    conversation = []
+    for m in messages:
+        is_self = m.speaker_user_id == host_user_id
+        entry = {
+            "id": m.id,
+            "speaker": "host" if is_self else "peer",
+            "turn": m.turn,
+            "intent": m.intent,
+            "topic_ref": m.topic_ref,
+            "utterance": m.utterance,
+            "public_signals": m.public_signals,
+        }
+        if is_self:
+            entry["private_signals"] = m.private_signals
+        conversation.append(entry)
+
+    system = SUMMARY_SYSTEM_TEMPLATE.format(
+        host_md=_json.dumps(
+            profile.profile_json if profile else {}, ensure_ascii=False
+        ),
+        peer_block=peer_block,
+    )
+    user_payload = USER_PAYLOAD_TEMPLATE.format(
+        end_reason=chat.end_reason or "unknown",
+        turn_count=len(conversation),
+        conversation=_json.dumps(conversation, ensure_ascii=False, indent=2),
+    )
+
+    resp = await llm_chat(
+        role="summary",
+        messages=[Message(role="user", content=user_payload)],
+        system=system,
+        max_tokens=2048,
+        temperature=0.6,
+        db=None,  # dry run
+    )
+
+    parsed = _parse_loose_json(resp.text) or {}
+
+    return {
+        "summary_id": summary_id,
+        "host_user_id": host_user_id,
+        "agent_chat_id": summary.agent_chat_id,
+        "old": {
+            "verdict": summary.verdict,
+            "highlights": summary.highlights,
+            "risks": summary.risks,
+            "recommended_action": summary.recommended_action,
+        },
+        "new": {
+            "verdict": parsed.get("verdict"),
+            "highlights": parsed.get("highlights", []),
+            "risks": parsed.get("risks", []),
+            "recommended_action": parsed.get("recommended_action"),
+        },
+    }
