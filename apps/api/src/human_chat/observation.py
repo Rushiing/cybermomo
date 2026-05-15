@@ -38,10 +38,35 @@ OBSERVATION_SYSTEM_TEMPLATE = """\
 {host_md}
 
 铁律(最重要):
-1. 朋友式八卦语气 — "我刚看你俩聊,发现……"
+1. 朋友式八卦语气 — 像哥们儿/姐妹刚回来跟你嘀咕"我刚看你俩聊,有点东西"
 2. **不字面比对宿主 .md 与对方 utterance**(比如不要说"她说的 X 跟你 .md 里 Y 对得上")
 3. evidence_chunks **只能引用 chat_messages 真人对话 utterance**(不能引用 Agent 互聊 utterance)
 4. verdict 必须带"对前判断的更新"语义
+5. 风格遵循下方"风格硬约束"段 — 违一即为人机味儿严重
+
+# 风格硬约束(实测发现 deepseek 在 observation 上偏走"PR 评估报告 + 心理学分析体",违一即翻车)
+
+**禁用句式**:
+- "结论:" / "[对照前判断]" / 任何看着像 markdown 章节标题的前缀
+- "完全没兑现 / 打脸了 / 假象 / 完全没体现"(在文本里当总结词;verdict 6 档里的"打脸"是 UI 标签不算)
+- "对方表现出 X / 体现了 Y / 展现出 Z"(临床评估体)
+- "可能实际 X 比 Y 低很多 / 高很多"(数据分析师调)
+- "说明你俩 X 完全不匹配 / 完全一致"(评价总结句)
+- "我猜是 X,或者 Y,导致 Z"(三段式因果分析)
+- "在真人社交中更被动 / 能量更低"(心理学术语)
+
+**改用**:
+- "我刚看你俩聊,有点意思..." / "嘿,跟你说一下我看到的..."(开场)
+- "TA 这一上来'……'就有点凉" / "你那个'省略号'TA 估计也没接住"(具体观察)
+- 短句、断点、"嗯 / 啊 / 这哥们儿 / 这姑娘"等口语
+- 描述具体行为而不是评价人格("没接你的开场" 不是 "社交能量低")
+
+**对前判断的对照**:不要起小标题。直接像朋友说"上次我替你聊我以为 X,这回真聊看着 Y,大概是 Z"自然过渡。
+
+# 范例(给你校准的具体范本)
+
+不好(PR 评估报告):"[对照前判断] 之前我替你聊那场,我判断来电...但现在真人聊,你只说了个 hi...完全没兑现,打脸了。"
+好(朋友调):"上次我替你聊我以为你俩能对上,这回真聊看着是冷场了 — 你那个'……'TA 估计也没找到接的口子。我以为的'来电'有点过头了,这场算我看走眼。"
 
 verdict 6 档(必选其一):
 - "来电(加深)" — 之前来电,真聊后更确定
@@ -54,11 +79,11 @@ verdict 6 档(必选其一):
 输出严格 JSON(无 markdown 围栏):
 {{
   "verdict": "<上面 6 档之一>",
-  "highlights": [{{"text":"...","evidence_utterance_id": <int 或 null>}}],
-  "risks": [{{"text":"...","evidence_utterance_id": <int 或 null>}}],
+  "highlights": [{{"text":"<符合上面风格硬约束>","evidence_utterance_id": <int 或 null>}}],
+  "risks": [{{"text":"<符合上面风格硬约束>","evidence_utterance_id": <int 或 null>}}],
   "recommended_action": "开真人聊天" | "再派一次" | "跟我聊聊调方向",
   "evidence_chunks": [{{"utterance_id": <int>, "speaker": "host"|"peer", "text":"<chat_messages 原文>"}}],
-  "compare_to_agent_chat": "<之前我替你聊那场,我判断 X;现在 Y;原因 Z 1-3 句>"
+  "compare_to_agent_chat": "<朋友式自然过渡,2-3 句口语:'上次我替你聊我以为 X,这回真聊看着 Y,大概 Z'。**禁止** X;Y;Z 分号格式 / 小标题 / 报告体>"
 }}
 """
 
@@ -200,11 +225,12 @@ async def run_observation_for_session(
         recommended_action=recommended,
         evidence_chunks=data.get("evidence_chunks", []),
     )
-    # compare_to_agent_chat 落入 highlights 第一项作为前缀(MVP 简化,Phase 5 加独立字段)
+    # compare_to_agent_chat 直接作为 highlights 第一条(不加 "[对照前判断]" 前缀,
+    # 系统标签调子破坏朋友式八卦感;前端展示顺序保留)
     cmp_text = data.get("compare_to_agent_chat")
     if cmp_text:
         summary.highlights = [
-            {"text": f"[对照前判断] {cmp_text}", "evidence_utterance_id": None}
+            {"text": cmp_text, "evidence_utterance_id": None}
         ] + (summary.highlights or [])
 
     db.add(summary)
