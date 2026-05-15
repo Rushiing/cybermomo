@@ -617,3 +617,142 @@ async def voice_audit_rerun_callout(
         "new_tone": new_tone,
         "new_raw": parsed,
     }
+
+
+# ========================================
+# 临时:Voice audit dry-run · 用当前 prompt 重跑某 match 的 desensitize(整段可删)
+# ========================================
+
+
+@router.post("/voice-audit-rerun-desensitize")
+async def voice_audit_rerun_desensitize(
+    match_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用当前 desensitize SYSTEM_PROMPT 重跑某 match_id 的 hook 生成,**不写库**,
+    返回 old_hooks(DB 现存) + new_hooks(LLM 新输出)给 prompt 工程做 A/B。
+
+    用法:
+      POST /api/admin/voice-audit-rerun-desensitize?match_id=55
+    """
+    _require_admin(x_admin_secret)
+
+    import json as _json
+    from src.llm.gateway import llm_chat
+    from src.llm.types import Message
+    from src.match.desensitize import (
+        SYSTEM_PROMPT as DESENSITIZE_SYSTEM,
+        _extract_safe_profile_summary,
+        _parse_loose_json,
+    )
+    from src.match.models import Match, MatchHook, Matchpoint
+    from src.md.models import MdDocument
+
+    match = (
+        await db.execute(select(Match).where(Match.id == match_id))
+    ).scalar_one_or_none()
+    if match is None:
+        raise HTTPException(404, detail=f"match {match_id} not found")
+
+    mps = (
+        await db.execute(
+            select(Matchpoint).where(Matchpoint.match_id == match_id)
+        )
+    ).scalars().all()
+    if not mps:
+        raise HTTPException(404, detail=f"match {match_id} 无 matchpoints")
+
+    profiles_rows = (
+        await db.execute(
+            select(MdDocument).where(
+                MdDocument.user_id.in_([match.user_a_id, match.user_b_id]),
+                MdDocument.is_active.is_(True),
+            )
+        )
+    ).scalars().all()
+    profile_by_user = {p.user_id: p.profile_json for p in profiles_rows}
+    if (
+        match.user_a_id not in profile_by_user
+        or match.user_b_id not in profile_by_user
+    ):
+        raise HTTPException(409, detail="缺一方 active profile,跑不动")
+
+    a_profile = _extract_safe_profile_summary(profile_by_user[match.user_a_id])
+    b_profile = _extract_safe_profile_summary(profile_by_user[match.user_b_id])
+
+    matchpoints_input = [
+        {
+            "idx": i,
+            "category": mp.category,
+            "match_type": mp.match_type,
+            "similarity": float(mp.similarity),
+            "weight": float(mp.weight),
+            "a_source_segments": mp.a_source_segments,
+            "b_source_segments": mp.b_source_segments,
+        }
+        for i, mp in enumerate(mps[:8])
+    ]
+
+    user_payload = _json.dumps(
+        {
+            "match_id": match.id,
+            "is_wildcard": match.is_wildcard,
+            "overall_score": float(match.overall_score),
+            "user_a": {"id": match.user_a_id, "profile_summary": a_profile},
+            "user_b": {"id": match.user_b_id, "profile_summary": b_profile},
+            "matchpoints": matchpoints_input,
+        },
+        ensure_ascii=False,
+    )
+
+    resp = await llm_chat(
+        role="desensitize",
+        messages=[Message(role="user", content=user_payload)],
+        system=DESENSITIZE_SYSTEM,
+        max_tokens=2048,
+        temperature=0.5,
+        db=None,  # dry run · 不写 llm_call_log
+    )
+
+    parsed = _parse_loose_json(resp.text) or {}
+
+    def _new_row(h: dict) -> dict:
+        ht = h.get("hook_text") or ""
+        return {
+            "category": h.get("category"),
+            "match_type": h.get("match_type"),
+            "hook_text": ht,
+            "sensitivity_level": h.get("sensitivity_level"),
+            "char_count": len(ht),
+        }
+
+    new_hooks_a = [_new_row(h) for h in parsed.get("hooks_for_a", [])]
+    new_hooks_b = [_new_row(h) for h in parsed.get("hooks_for_b", [])]
+
+    old_hooks = (
+        await db.execute(
+            select(MatchHook).where(MatchHook.match_id == match_id)
+        )
+    ).scalars().all()
+
+    def _old_row(h: MatchHook) -> dict:
+        return {
+            "category": h.category,
+            "match_type": h.match_type,
+            "hook_text": h.hook_text,
+            "sensitivity_level": h.sensitivity_level,
+            "char_count": len(h.hook_text or ""),
+        }
+
+    old_hooks_a = [_old_row(h) for h in old_hooks if h.target_user_id == match.user_a_id]
+    old_hooks_b = [_old_row(h) for h in old_hooks if h.target_user_id == match.user_b_id]
+
+    return {
+        "match_id": match_id,
+        "user_a_id": match.user_a_id,
+        "user_b_id": match.user_b_id,
+        "old_hooks": {"for_a": old_hooks_a, "for_b": old_hooks_b},
+        "new_hooks": {"for_a": new_hooks_a, "for_b": new_hooks_b},
+    }
