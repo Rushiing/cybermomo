@@ -489,3 +489,131 @@ async def voice_audit_sample(
             for h in hook_rows
         ],
     }
+
+
+# ========================================
+# 临时:Voice audit dry-run · 用当前 prompt 重跑某条 callout(整段可删)
+# ========================================
+
+
+@router.post("/voice-audit-rerun-callout")
+async def voice_audit_rerun_callout(
+    callout_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用当前 CALLOUT_SYSTEM_TEMPLATE 重跑某条 callout 的 LLM 调用,**不写库**,
+    返回 old_response + new_response 给 prompt 工程做 A/B 对比。
+
+    用法:
+      POST /api/admin/voice-audit-rerun-callout?callout_id=6
+    """
+    _require_admin(x_admin_secret)
+
+    import json as _json
+    from src.human_chat.callout import (
+        CALLOUT_SYSTEM_TEMPLATE,
+        USER_PAYLOAD_TEMPLATE,
+    )
+    from src.human_chat.models import ChatCallout, ChatMessage, ChatSession
+    from src.llm.gateway import llm_chat
+    from src.llm.types import Message
+    from src.match.desensitize import _parse_loose_json
+    from src.md.models import MdDocument
+
+    callout = (
+        await db.execute(
+            select(ChatCallout).where(ChatCallout.id == callout_id)
+        )
+    ).scalar_one_or_none()
+    if callout is None:
+        raise HTTPException(404, detail=f"callout {callout_id} not found")
+
+    session_row = (
+        await db.execute(
+            select(ChatSession).where(ChatSession.id == callout.session_id)
+        )
+    ).scalar_one_or_none()
+    if session_row is None:
+        raise HTTPException(404, detail=f"session {callout.session_id} 已删")
+
+    profile = (
+        await db.execute(
+            select(MdDocument).where(
+                MdDocument.user_id == callout.host_user_id,
+                MdDocument.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+    messages = (
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_row.id)
+            .order_by(ChatMessage.sent_at)
+        )
+    ).scalars().all()
+    messages_data = [
+        {
+            "id": m.id,
+            "sender": "host" if m.sender_user_id == callout.host_user_id else "peer",
+            "type": m.content_type,
+            "content": m.content if m.content_type == "text" else "[图片]",
+            "sent_at": m.sent_at.isoformat(),
+        }
+        for m in messages
+    ]
+
+    prev_callouts = (
+        await db.execute(
+            select(ChatCallout)
+            .where(
+                ChatCallout.session_id == session_row.id,
+                ChatCallout.host_user_id == callout.host_user_id,
+                ChatCallout.id < callout.id,
+            )
+            .order_by(ChatCallout.created_at)
+        )
+    ).scalars().all()
+    callouts_data = [
+        {"prompt": c.callout_prompt, "response": c.callout_response}
+        for c in prev_callouts
+    ]
+
+    system = CALLOUT_SYSTEM_TEMPLATE.format(
+        host_md=_json.dumps(
+            profile.profile_json if profile else {}, ensure_ascii=False
+        ),
+    )
+    user_payload = USER_PAYLOAD_TEMPLATE.format(
+        messages=_json.dumps(messages_data, ensure_ascii=False, indent=2),
+        callouts=_json.dumps(callouts_data, ensure_ascii=False, indent=2),
+        prompt=callout.callout_prompt,
+        context_ids=callout.context_message_ids or [],
+    )
+
+    resp = await llm_chat(
+        role="callout",
+        messages=[Message(role="user", content=user_payload)],
+        system=system,
+        max_tokens=1024,
+        temperature=0.7,
+        db=None,  # dry run · 不写 llm_call_log
+    )
+
+    parsed = _parse_loose_json(resp.text) or {}
+    new_response = str(parsed.get("response_text", ""))
+    new_emotional = parsed.get("emotional_read") or {}
+    new_tone = new_emotional.get("tone") if isinstance(new_emotional, dict) else None
+
+    return {
+        "callout_id": callout_id,
+        "host_user_id": callout.host_user_id,
+        "session_id": callout.session_id,
+        "callout_prompt": callout.callout_prompt,
+        "old_response": callout.callout_response,
+        "new_response": new_response,
+        "new_tone": new_tone,
+        "new_raw": parsed,
+    }
