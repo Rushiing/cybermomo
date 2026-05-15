@@ -924,3 +924,132 @@ async def voice_audit_rerun_observation(
             "compare_to_agent_chat": parsed.get("compare_to_agent_chat"),
         },
     }
+
+
+# ========================================
+# 临时:Voice audit dry-run · 用当前 prompt 重跑某 prebriefing summary(整段可删)
+# ========================================
+
+
+@router.post("/voice-audit-rerun-prebriefing")
+async def voice_audit_rerun_prebriefing(
+    summary_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用当前 PREBRIEFING_SYSTEM_TEMPLATE 重跑某 summary_id 的 prebriefing,
+    **不写库**,返回 old(DB 现存) + new(LLM 新输出) 给 prompt 工程做 A/B。
+
+    summary 必须 summary_type='pre_briefing'。
+
+    用法:
+      POST /api/admin/voice-audit-rerun-prebriefing?summary_id=3
+    """
+    _require_admin(x_admin_secret)
+
+    import json as _json
+    from src.agent_chat.models import AgentChat, AgentChatMessage
+    from src.human_chat.prebriefing import (
+        PREBRIEFING_SYSTEM_TEMPLATE,
+        USER_PAYLOAD_TEMPLATE,
+    )
+    from src.llm.gateway import llm_chat
+    from src.llm.types import Message
+    from src.match.desensitize import _parse_loose_json
+    from src.md.models import MdDocument
+    from src.summary.models import Summary
+
+    summary = (
+        await db.execute(select(Summary).where(Summary.id == summary_id))
+    ).scalar_one_or_none()
+    if summary is None:
+        raise HTTPException(404, detail=f"summary {summary_id} not found")
+    if summary.summary_type != "pre_briefing":
+        raise HTTPException(
+            409,
+            detail=f"summary {summary_id} 不是 pre_briefing(type={summary.summary_type})",
+        )
+    if summary.agent_chat_id is None:
+        raise HTTPException(409, detail=f"summary {summary_id} 缺 agent_chat_id")
+
+    chat = (
+        await db.execute(
+            select(AgentChat).where(AgentChat.id == summary.agent_chat_id)
+        )
+    ).scalar_one_or_none()
+    if chat is None:
+        raise HTTPException(404, detail=f"agent_chat {summary.agent_chat_id} 已删")
+
+    host_user_id = summary.host_user_id
+
+    profile = (
+        await db.execute(
+            select(MdDocument).where(
+                MdDocument.user_id == host_user_id,
+                MdDocument.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+    messages = (
+        await db.execute(
+            select(AgentChatMessage)
+            .where(AgentChatMessage.agent_chat_id == chat.id)
+            .order_by(AgentChatMessage.turn)
+        )
+    ).scalars().all()
+
+    conversation = []
+    for m in messages:
+        is_self = m.speaker_user_id == host_user_id
+        entry = {
+            "id": m.id,
+            "speaker": "host" if is_self else "peer",
+            "turn": m.turn,
+            "intent": m.intent,
+            "topic_ref": m.topic_ref,
+            "utterance": m.utterance,
+            "public_signals": m.public_signals,
+        }
+        if is_self:
+            entry["private_signals"] = m.private_signals
+        conversation.append(entry)
+
+    system = PREBRIEFING_SYSTEM_TEMPLATE.format(
+        host_md=_json.dumps(
+            profile.profile_json if profile else {}, ensure_ascii=False
+        ),
+    )
+    user_payload = USER_PAYLOAD_TEMPLATE.format(
+        host_user_id=host_user_id,
+        conversation=_json.dumps(conversation, ensure_ascii=False, indent=2),
+    )
+
+    resp = await llm_chat(
+        role="prebriefing",
+        messages=[Message(role="user", content=user_payload)],
+        system=system,
+        max_tokens=2048,
+        temperature=0.6,
+        db=None,  # dry run
+    )
+
+    parsed = _parse_loose_json(resp.text) or {}
+
+    return {
+        "summary_id": summary_id,
+        "host_user_id": host_user_id,
+        "agent_chat_id": summary.agent_chat_id,
+        "old": {
+            "verdict": summary.verdict,
+            "highlights": summary.highlights,
+            "risks": summary.risks,
+            "recommended_action": summary.recommended_action,
+        },
+        "new": {
+            "highlights": parsed.get("highlights", []),
+            "risks": parsed.get("risks", []),
+            "recommended_action": parsed.get("recommended_action"),
+        },
+    }
