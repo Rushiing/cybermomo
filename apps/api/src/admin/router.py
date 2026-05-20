@@ -1216,3 +1216,145 @@ async def voice_audit_rerun_summary(
             "recommended_action": parsed.get("recommended_action"),
         },
     }
+
+
+# ========================================
+# 临时:Voice audit dry-run · 用当前 prompt 重跑某场 agent_chat 的 turn 1
+# ========================================
+
+
+@router.post("/voice-audit-rerun-agent-chat-turn1")
+async def voice_audit_rerun_agent_chat_turn1(
+    chat_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    用当前 agent_chat PLATFORM_SYSTEM 重跑某 chat 的 **turn 1**,不写库,返回
+    新旧 turn 1 utterance 对比。
+
+    用途:验证反"peer MBTI 当谈资"硬约束是否生效 — 2026-05-15 voice audit
+    在 chat_id=56 命中"ESTJ应该挺果断的吧?" / "INTP应该更爱先想透吧?" 病灶。
+
+    跑 turn 1 即可,因为 MBTI 暴露病灶在 LLM 没有 history 时最容易出。
+    不跑完整 8 轮(LLM call 多 + 慢)。
+
+    用法:POST /api/admin/voice-audit-rerun-agent-chat-turn1?chat_id=56
+    """
+    _require_admin(x_admin_secret)
+
+    from src.agent_chat.engine import (
+        _ask_one_turn,
+        _summarize_md_for_prompt,
+    )
+    from src.agent_chat.models import AgentChat, AgentChatMessage
+    from src.auth.models import UserProfile
+    from src.match.models import Match, MatchHook
+    from src.md.models import MdDocument
+    from src.shared.peer_prompt import format_peer_block
+
+    chat = (
+        await db.execute(select(AgentChat).where(AgentChat.id == chat_id))
+    ).scalar_one_or_none()
+    if chat is None:
+        raise HTTPException(404, detail=f"chat {chat_id} not found")
+
+    match = (
+        await db.execute(select(Match).where(Match.id == chat.match_id))
+    ).scalar_one_or_none()
+    if match is None:
+        raise HTTPException(404, detail=f"match {chat.match_id} not found")
+
+    hooks = (
+        await db.execute(select(MatchHook).where(MatchHook.match_id == match.id))
+    ).scalars().all()
+    if not hooks:
+        raise HTTPException(409, detail="no hooks for match")
+
+    profiles_rows = (
+        await db.execute(
+            select(MdDocument).where(
+                MdDocument.user_id.in_([match.user_a_id, match.user_b_id]),
+                MdDocument.is_active.is_(True),
+            )
+        )
+    ).scalars().all()
+    profile_by_user = {p.user_id: p.profile_json for p in profiles_rows}
+    if (
+        match.user_a_id not in profile_by_user
+        or match.user_b_id not in profile_by_user
+    ):
+        raise HTTPException(409, detail="缺一方 active profile")
+
+    up_rows = (
+        await db.execute(
+            select(UserProfile).where(
+                UserProfile.user_id.in_([match.user_a_id, match.user_b_id])
+            )
+        )
+    ).scalars().all()
+    up_by_user = {up.user_id: up for up in up_rows}
+
+    # turn 1 speaker 永远是 user_a(看 run_agent_chat 的 speaker_order)
+    speaker_user_id = match.user_a_id
+    peer_user_id = match.user_b_id
+    speaker_up = up_by_user.get(speaker_user_id)
+    peer_up = up_by_user.get(peer_user_id)
+    peer_block = format_peer_block(
+        peer_nickname=peer_up.nickname if peer_up else None,
+        peer_user_id=peer_user_id,
+        peer_age_band=peer_up.age_band if peer_up else None,
+        peer_gender=peer_up.gender if peer_up else None,
+        peer_mbti=peer_up.mbti if peer_up else None,
+        host_age_band=speaker_up.age_band if speaker_up else None,
+    )
+
+    # 跑 turn 1,**注意 _ask_one_turn 只调 LLM + 返回 dict,不写 AgentChatMessage
+    # 表(那是 run_agent_chat 的职责)。LlmCallLog 仍会写,作为审计记录留底。
+    data = await _ask_one_turn(
+        db,
+        chat=chat,
+        speaker_user_id=speaker_user_id,
+        turn_number=1,
+        max_turns=8,
+        md_profile=_summarize_md_for_prompt(profile_by_user[speaker_user_id]),
+        hooks=hooks,
+        history=[],
+        avoid_topic_refs=[],
+        peer_block=peer_block,
+    )
+    if data is None:
+        raise HTTPException(502, detail="LLM 返回无法解析为 JSON")
+
+    # 旧 turn 1(DB 现存)
+    old_t1 = (
+        await db.execute(
+            select(AgentChatMessage).where(
+                AgentChatMessage.agent_chat_id == chat_id,
+                AgentChatMessage.turn == 1,
+            )
+        )
+    ).scalar_one_or_none()
+
+    return {
+        "chat_id": chat_id,
+        "match_id": match.id,
+        "speaker_user_id": speaker_user_id,
+        "peer": {
+            "user_id": peer_user_id,
+            "nickname": peer_up.nickname if peer_up else None,
+            "mbti": peer_up.mbti if peer_up else None,
+            "age_band": peer_up.age_band if peer_up else None,
+            "gender": peer_up.gender if peer_up else None,
+        },
+        "old_t1": {
+            "utterance": old_t1.utterance,
+            "intent": old_t1.intent,
+            "topic_ref": old_t1.topic_ref,
+        } if old_t1 else None,
+        "new_t1": {
+            "utterance": data.get("utterance"),
+            "intent": data.get("intent"),
+            "topic_ref": data.get("topic_ref"),
+        },
+    }

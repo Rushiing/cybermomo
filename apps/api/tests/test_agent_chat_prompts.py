@@ -158,6 +158,11 @@ def test_platform_system_keeps_anti_synthetic_constraints():
     assert "真人审" in PLATFORM_SYSTEM
     assert "两个 AI 在客气地互相恭维" in PLATFORM_SYSTEM
     assert "很高兴认识你" in PLATFORM_SYSTEM
+    # peer demographic 不当谈资(voice audit 2026-05-15 命中 chat_id=56:
+    # "ESTJ应该挺果断的吧?" / "INTP应该更爱先想透吧?" — peer MBTI 字段
+    # 不该出现在 utterance 里,只用来 calibrate 自己这一侧语气)
+    assert "禁用把 peer demographic 当谈资抛出" in PLATFORM_SYSTEM
+    assert "calibrate 你这一侧 Agent" in PLATFORM_SYSTEM
 
 
 async def test_turn_prompt_template_injects_peer_block(
