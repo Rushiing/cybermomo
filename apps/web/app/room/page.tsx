@@ -46,7 +46,25 @@ export default function RoomPage() {
 
   const myUid = Number(getMockUserId())
 
-  useEffect(() => { void loadAll() }, [])
+  useEffect(() => {
+    void loadAll()
+    // 用户刚 onboarding 完进 /room 时,后台 pipeline 大概率还在跑(实测
+    // ~6-8 分钟跑完 5 match × ~11 LLM call)。POST /api/md 触发的 BackgroundTask
+    // fire-and-forget,前端没法精准等 — 用 polling 自动刷新,5 分钟超时停。
+    //
+    // 30s 间隔在"顺滑"和"开销"之间平衡:loadAll 3 个轻 SQL 并发 ~300ms。
+    const startedAt = Date.now()
+    const POLL_INTERVAL_MS = 30_000
+    const POLL_DEADLINE_MS = 5 * 60_000
+    const id = setInterval(() => {
+      if (Date.now() - startedAt > POLL_DEADLINE_MS) {
+        clearInterval(id)
+        return
+      }
+      void loadAll()
+    }, POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
   useEffect(() => {
     if (!notice) return
     const t = setTimeout(() => setNotice(null), 5000)
