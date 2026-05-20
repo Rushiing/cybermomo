@@ -25,6 +25,7 @@ import {
   type UserMeResponse,
   getMockUserId,
 } from "@/lib/api"
+import { displayUserId } from "@/lib/userid"
 
 const AGE_OPTIONS = ["18-25", "25-30", "30-35", "35-40", "40+"] as const
 const GENDER_OPTIONS = [
@@ -156,7 +157,7 @@ export default function MePage() {
                   {me?.profile?.age_band || "—"} · {me?.profile?.gender || "—"} · {me?.profile?.mbti || "—"}
                 </div>
                 <div className="text-xs text-ink-tertiary mt-1">
-                  user_id {me?.id || `(mock ${getMockUserId()})`} · {me?.email || "—"}
+                  {me?.id ? displayUserId(me.id) : `(mock ${getMockUserId()})`} · {me?.email || "—"}
                 </div>
               </div>
             </section>
