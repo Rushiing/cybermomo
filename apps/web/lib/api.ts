@@ -45,6 +45,36 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Railway 单 worker 偶发拥塞会让浏览器 fetch 直接抛 TypeError("Failed to fetch")。
+ * 这跟 server 返 4xx/5xx 不一样:fetch 根本没拿到 HTTP 响应 — 多半是连接被
+ * 拒/重置或者 TCP layer 异常。这种情况 retry 是安全的(idempotent or not 都没
+ * 真到 server),不会重复扣副作用。
+ *
+ * 4xx/5xx 不重试 — 那是 server 真的返了,语义已经发生。
+ */
+const FETCH_RETRY_DELAYS_MS = [800, 2500]  // 总最坏 ~3.3s + 实际 fetch 时间
+
+async function _fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt <= FETCH_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetch(url, init)
+    } catch (e: any) {
+      lastErr = e
+      // 只重试网络层错(TypeError);AbortError(用户取消)不重试
+      const isAbort = e?.name === "AbortError"
+      const isNetwork = e instanceof TypeError
+      if (isAbort || !isNetwork || attempt >= FETCH_RETRY_DELAYS_MS.length) {
+        throw e
+      }
+      // backoff 后继续
+      await new Promise(r => setTimeout(r, FETCH_RETRY_DELAYS_MS[attempt]))
+    }
+  }
+  throw lastErr
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = `${BASE}${path}`
   const init: RequestInit = {
@@ -58,7 +88,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) {
     init.body = JSON.stringify(body)
   }
-  const resp = await fetch(url, init)
+  const resp = await _fetchWithRetry(url, init)
   const text = await resp.text()
   let data: any = null
   if (text) {
