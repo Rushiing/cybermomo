@@ -1358,3 +1358,59 @@ async def voice_audit_rerun_agent_chat_turn1(
             "topic_ref": data.get("topic_ref"),
         },
     }
+
+
+# ========================================
+# 临时:DB 容量自查 · 给扩容(workers/pool)做决策(整段可删)
+# ========================================
+
+
+@router.get("/db-stats")
+async def db_stats(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    只读:查 Postgres max_connections + 当前连接数 + 本库连接分布。
+    用来决定 uvicorn workers × SQLAlchemy pool 怎么配(避免撞爆连接上限)。
+
+    用完可删:把本注释 + 函数 cut 掉,顶部 imports 不动。
+    """
+    _require_admin(x_admin_secret)
+
+    from sqlalchemy import text as _text
+
+    max_conn = (await db.execute(_text("SHOW max_connections"))).scalar_one()
+
+    total_active = (await db.execute(
+        _text("SELECT count(*) FROM pg_stat_activity")
+    )).scalar_one()
+
+    this_db_active = (await db.execute(_text(
+        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
+    ))).scalar_one()
+
+    # 按 state 分布(idle / active / idle in transaction)
+    by_state_rows = (await db.execute(_text(
+        "SELECT coalesce(state, 'unknown') AS state, count(*) "
+        "FROM pg_stat_activity WHERE datname = current_database() "
+        "GROUP BY state ORDER BY count(*) DESC"
+    ))).all()
+
+    # 一些 PG plan 还会有 superuser_reserved_connections
+    reserved = (await db.execute(
+        _text("SHOW superuser_reserved_connections")
+    )).scalar_one()
+
+    return {
+        "max_connections": int(max_conn),
+        "superuser_reserved": int(reserved),
+        "usable_for_app": int(max_conn) - int(reserved),
+        "current_total_active": int(total_active),
+        "current_this_db_active": int(this_db_active),
+        "by_state": {str(s): int(c) for s, c in by_state_rows},
+        "note": (
+            "usable_for_app 是给所有 api worker 共享的上限。"
+            "workers × (pool_size + max_overflow) 必须 < usable_for_app。"
+        ),
+    }
