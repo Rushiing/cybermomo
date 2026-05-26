@@ -33,5 +33,12 @@ EXPOSE 8000
 
 # 启动命令
 # 注:不用 shell form `CMD foo` 因为要展开 ${PORT};使用 sh -c 显式
-# 先跑 alembic upgrade(若失败用 || true 不阻塞,首次部署或脏环境下 noop),再起服务
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# 先跑 alembic upgrade(单进程,在 fork worker 前完成,migration 不并发),再起服务。
+#
+# --workers 4:Railway Hobby 8 vCPU 充裕。单 worker 时 LLM `await chat.completions`
+# 不 yield CPU,event loop 上其他请求被挤几十秒("Failed to fetch")。4 worker
+# 把请求散开,真人内测(100 人陆续)的并发能扛。
+# 连接数:4 × (pool 10 + overflow 10) = 80 < PG usable 97(见 src/shared/db.py)。
+# 注意:workers>1 后 admin seed 的 in-memory job state(_PIPELINE_JOB 等)会分散到
+# 各 worker 进程,/seed/status 可能读不到 — seed 是一次性 ops,内测期不跑就没影响。
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"]
