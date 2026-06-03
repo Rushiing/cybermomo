@@ -1,0 +1,70 @@
+# Fly.io API service · cybermomo-api
+#
+# 用法:
+#   flyctl deploy --config fly.api.toml --dockerfile Dockerfile
+#
+# 第一次部署前还要:
+#   1. flyctl apps create cybermomo-api --org personal
+#   2. flyctl postgres create --name cybermomo-pg --region hkg --vm-size shared-cpu-1x --volume-size 10
+#   3. flyctl postgres attach --app cybermomo-api cybermomo-pg
+#      (会自动注入 DATABASE_URL 给 cybermomo-api,但注意 Fly 给的是 postgres://,
+#       本仓库 settings.py 已经做了归一化 → asyncpg)
+#   4. flyctl secrets set --app cybermomo-api \
+#        JWT_SECRET=... DASHSCOPE_API_KEY=... GOOGLE_OAUTH_CLIENT_ID=... \
+#        GOOGLE_OAUTH_CLIENT_SECRET=... ADMIN_SECRET=... CORS_ORIGINS=https://cybermomo-web.fly.dev
+#
+# 区域选 hkg(香港),从中国大陆 ~50-100ms,比 Railway 新加坡快 3-5 倍。
+
+app = "cybermomo-api"
+primary_region = "hkg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  # 让 Python stdout 即时刷出,Fly 日志没缓冲延迟
+  PYTHONUNBUFFERED = "1"
+  LLM_MODEL = "deepseek-v4-flash"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # MVP 阶段:闲置不缩到 0(避免 cold start LLM 慢)
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[http_service.concurrency]
+  type = "requests"
+  # 单 machine 最多并发 200 请求(uvicorn workers=4 + asyncio,峰值能扛)
+  # 超过 soft_limit Fly 会启第二台 machine(如果配了 scale > 1)
+  soft_limit = 150
+  hard_limit = 200
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "30s"
+  method = "GET"
+  path = "/healthz"
+
+[[vm]]
+  # 单 machine 配置:1 vCPU + 1GB RAM,够 uvicorn workers=4(~600-800MB peak)
+  # 不够再升 shared-cpu-2x · 2GB,或者横向加 machine
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# 进程组:默认 "app",CMD 走 Dockerfile 里那行 alembic + uvicorn
+[processes]
+  app = ""
+
+# 注:Fly 没原生 cron。observation-sweep 每小时调用,迁移后用以下任一方案:
+#   A. flyctl machine run --schedule hourly --rm --command \
+#        'curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" https://cybermomo-api.fly.dev/api/admin/observation-sweep'
+#   B. 外部免费 cron 服务(cron-job.org / GitHub Actions schedule)调 admin endpoint
+#   C. 在 api 进程里跑 apscheduler(workers>1 时要加分布式锁,麻烦)
+# 推荐 B —— 跟 Fly 解耦,Fly 部署不影响 cron。
