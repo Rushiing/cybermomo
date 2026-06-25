@@ -47,6 +47,11 @@ from src.shared.settings import get_settings
 
 router = APIRouter()
 
+# repair-all 进程级并发护栏(codex review P1-3):BackgroundTask 在同一进程/event loop 里跑,
+# 用一个 module flag 防止两次 repair-all 同时扫+补(否则同一 user 被两个后台任务重复补跑,
+# 虽然 pipeline 内部有 pg advisory lock 兜底,但白跑一遍 LLM 浪费配额)。
+_REPAIR_ALL_RUNNING = False
+
 
 def _require_admin(secret: Optional[str]) -> None:
     settings = get_settings()
@@ -390,18 +395,26 @@ async def pipeline_repair_one(
 
 
 async def _bg_repair_all() -> None:
-    """BackgroundTask:扫所有未完成 user 串行补跑"""
+    """BackgroundTask:扫所有未完成 user 串行补跑。
+
+    进程级 flag(_REPAIR_ALL_RUNNING)由调用方 endpoint 在 add_task 前同步置 True
+    (check-and-set 之间无 await,asyncio 单线程下原子),本函数只负责在结束时清掉。
+    """
+    global _REPAIR_ALL_RUNNING
     try:
-        uids = await find_users_with_incomplete_pipeline()
-    except Exception as e:
-        print(f"[pipeline-repair-all] scan failed: {e}")
-        return
-    print(f"[pipeline-repair-all] {len(uids)} users to repair")
-    for uid in uids:
         try:
-            await resume_incomplete_pipeline_for_user(uid)
+            uids = await find_users_with_incomplete_pipeline()
         except Exception as e:
-            print(f"[pipeline-repair-all] user={uid} failed: {e}")
+            print(f"[pipeline-repair-all] scan failed: {e}")
+            return
+        print(f"[pipeline-repair-all] {len(uids)} users to repair")
+        for uid in uids:
+            try:
+                await resume_incomplete_pipeline_for_user(uid)
+            except Exception as e:
+                print(f"[pipeline-repair-all] user={uid} failed: {e}")
+    finally:
+        _REPAIR_ALL_RUNNING = False
 
 
 @router.post("/pipeline/repair-all")
@@ -414,10 +427,21 @@ async def pipeline_repair_all(
     用于内测中"一批用户后台链路半路丢"的批量恢复。进度看 api 日志
     [pipeline-resume] / [pipeline-repair-all]。
     """
+    global _REPAIR_ALL_RUNNING
     _require_admin(x_admin_secret)
+    if _REPAIR_ALL_RUNNING:
+        # 已有一轮在跑,别叠;返 409 让调用方等它跑完再调
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="repair-all 已在运行中,等它跑完(看 api 日志 [pipeline-repair-all])再调",
+        )
+    # 占位:check 之后立刻置 True,中间无 await(asyncio 单线程原子),关掉并发叠跑窗口。
+    # 由 _bg_repair_all 的 finally 负责清回 False。
+    _REPAIR_ALL_RUNNING = True
     try:
         uids = await find_users_with_incomplete_pipeline()
     except Exception as e:
+        _REPAIR_ALL_RUNNING = False  # 没排上后台任务,得把占位还回去
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"扫描失败: {type(e).__name__}: {e}",

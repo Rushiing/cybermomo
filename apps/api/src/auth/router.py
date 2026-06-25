@@ -49,6 +49,10 @@ from src.shared.settings import get_settings
 router = APIRouter()
 
 
+class AccountDeletedError(Exception):
+    """OAuth 流程里检测到软删/封禁用户(codex review P1-4),callback 转为带错重定向。"""
+
+
 @router.get("/me", response_model=UserMeResponse)
 async def me(
     current_user: User = CurrentUser,
@@ -223,11 +227,13 @@ async def login(
     Timing attack 防护:user 不存在时也跑一次 bcrypt(对一个 dummy hash),让两条
     失败路径耗时一致,避免 timing channel 泄露用户名是否存在。
     """
-    # 一次查 user + profile(eager load,省一个 RTT)
+    # 一次查 user + profile(eager load,省一个 RTT)。
+    # deleted_at IS NULL(codex review P1-4):被删用户当作不存在,不签新 cookie,
+    # 避免"登录成功后立刻 401"的坏状态。
     user = (await db.execute(
         select(User)
         .options(selectinload(User.profile))
-        .where(User.username == payload.username)
+        .where(User.username == payload.username, User.deleted_at.is_(None))
     )).scalar_one_or_none()
 
     # 关键:无论 user 存在与否,都走 timing_mitigation 版本 — 不存在时跑 dummy 等耗
@@ -397,14 +403,17 @@ async def google_callback(
     if not google_sub or not email:
         return _redirect_to_web_with_error("incomplete_id_token")
 
-    # 5. upsert User
-    user = await _upsert_user_from_google(
-        db,
-        google_sub=str(google_sub),
-        email=str(email),
-        name=name,
-        picture=picture,
-    )
+    # 5. upsert User(被软删/封禁用户 → 不签 cookie,带错重定向)
+    try:
+        user = await _upsert_user_from_google(
+            db,
+            google_sub=str(google_sub),
+            email=str(email),
+            name=name,
+            picture=picture,
+        )
+    except AccountDeletedError:
+        return _redirect_to_web_with_error("account_disabled")
 
     # 6. 写 session cookie + 跳 web
     next_path = "/room" if user.onboarded_at else "/onboarding"
@@ -425,10 +434,13 @@ async def _upsert_user_from_google(
     name: str | None,
     picture: str | None,
 ) -> User:
-    """根据 google_sub 找用户;不存在就建。"""
+    """根据 google_sub 找用户;不存在就建。被软删用户拒绝(codex review P1-4)。"""
     user = (
         await db.execute(select(User).where(User.google_sub == google_sub))
     ).scalar_one_or_none()
+    if user is not None and user.deleted_at is not None:
+        # 软删/封禁用户不许用 Google 重新登录(否则签了 cookie 又被 CurrentUser 401)
+        raise AccountDeletedError()
     if user is not None:
         # 已存在 — 同步 email / name / picture(允许用户在 Google 改了名字 / 头像)
         changed = False

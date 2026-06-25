@@ -42,3 +42,6 @@ next-env.d.ts
 
 # 运行时产物
 *.log
+
+# understand-anything 工具产物(本地知识图谱缓存,不入库)
+.understand-anything/

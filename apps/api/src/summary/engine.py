@@ -185,9 +185,17 @@ async def run_summary_for_chat(
     up_by_user: dict[int, UserProfile] = {up.user_id: up for up in user_profile_rows}
 
     new_summaries: list[Summary] = []
+    # per-host 幂等(codex P0-1):已有该 host 简报的跳过,只补缺的一侧。
+    # 单侧 LLM 失败后重跑/续跑时,不重复产已成功的一侧。
+    existing_hosts = set((await db.execute(
+        select(Summary.host_user_id).where(Summary.agent_chat_id == chat.id)
+    )).scalars().all())
+
     for host_user_id in [match.user_a_id, match.user_b_id]:
         if host_user_id not in profile_by_user:
             continue
+        if host_user_id in existing_hosts:
+            continue  # 该 host 已有简报,跳过(per-host 幂等)
 
         peer_user_id = match.user_b_id if host_user_id == match.user_a_id else match.user_a_id
         host_up = up_by_user.get(host_user_id)

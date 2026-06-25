@@ -11,7 +11,7 @@
 ### 1. 配 git 身份(commit author)
 
 ```bash
-cd /path/to/cybermomo-app
+cd /path/to/cybermomo/app
 git config user.name "CodeX"
 git config user.email "codex@cybermomo.local"
 ```
@@ -293,7 +293,7 @@ mock 用户会进入真人 onboarding 后的 matching 池,真人看到对方的 
 ### 跑一次确认没坏
 
 ```bash
-cd /path/to/cybermomo-app
+cd /path/to/cybermomo/app
 python3 scripts/mock_user_archetypes.py
 ```
 
