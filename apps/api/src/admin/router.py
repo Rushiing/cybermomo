@@ -8,6 +8,9 @@ Admin API · 给外部 cron / 一次性 ops 调用,需要 X-Admin-Secret 头
 - POST /api/admin/seed/run-pipeline        冷启动 · BackgroundTask 跑 mock pipeline
 - GET  /api/admin/seed/status              冷启动 · 看 pipeline 进度
 - GET  /api/admin/seed/verify              冷启动 · 只读校验 mock pool 数据
+- GET  /api/admin/pipeline/incomplete      只读 · 列"有 match 没简报"的 user
+- POST /api/admin/pipeline/repair          按 stage 补跑单 user 半成品 pipeline
+- POST /api/admin/pipeline/repair-all      后台批量补跑所有未完成 user
 
 Railway Cron Jobs 配置示例(observation sweep · 每小时):
    curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
@@ -24,7 +27,11 @@ from src.agent_self.backfill import backfill_all
 from src.agent_self.revisit import seed_revisit_after_silent_sweep
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
-from src.match.pipeline import run_full_pipeline_for_user
+from src.match.pipeline import (
+    find_users_with_incomplete_pipeline,
+    resume_incomplete_pipeline_for_user,
+    run_full_pipeline_for_user,
+)
 from src.seed.operations import (
     get_pipeline_job_state,
     get_redo_summaries_job_state,
@@ -335,3 +342,91 @@ async def seed_verify(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"verify 失败: {type(e).__name__}: {e}",
         )
+
+
+# ========================================
+# Pipeline 续跑修复(audit P0-4 / codex stab-P0-1)
+# 部署中断/LLM失败导致"有 match 没简报"的用户,按 stage 补跑
+# ========================================
+
+
+@router.get("/pipeline/incomplete")
+async def pipeline_incomplete(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    只读诊断:列出"有 match 但缺 summary"的 user_id(部署中断/LLM 失败的受害者)。
+    可随时调,不触发任何写入。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        uids = await find_users_with_incomplete_pipeline()
+        return {"ok": True, "incomplete_user_count": len(uids), "user_ids": uids}
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"扫描失败: {type(e).__name__}: {e}",
+        )
+
+
+@router.post("/pipeline/repair")
+async def pipeline_repair_one(
+    user_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    给单个 user 按 stage 补跑半成品 pipeline(同步,返回修复报告)。
+    幂等:每步前查产物,有就跳过。单 user 慢则几十秒-几分钟(看缺多少 LLM 步)。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        report = await resume_incomplete_pipeline_for_user(user_id)
+        return {"ok": True, **report}
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"修复失败: {type(e).__name__}: {e}",
+        )
+
+
+async def _bg_repair_all() -> None:
+    """BackgroundTask:扫所有未完成 user 串行补跑"""
+    try:
+        uids = await find_users_with_incomplete_pipeline()
+    except Exception as e:
+        print(f"[pipeline-repair-all] scan failed: {e}")
+        return
+    print(f"[pipeline-repair-all] {len(uids)} users to repair")
+    for uid in uids:
+        try:
+            await resume_incomplete_pipeline_for_user(uid)
+        except Exception as e:
+            print(f"[pipeline-repair-all] user={uid} failed: {e}")
+
+
+@router.post("/pipeline/repair-all")
+async def pipeline_repair_all(
+    background_tasks: BackgroundTasks,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    扫所有"有 match 没简报"的 user,后台串行补跑。立即返 202 + 待修复数。
+    用于内测中"一批用户后台链路半路丢"的批量恢复。进度看 api 日志
+    [pipeline-resume] / [pipeline-repair-all]。
+    """
+    _require_admin(x_admin_secret)
+    try:
+        uids = await find_users_with_incomplete_pipeline()
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"扫描失败: {type(e).__name__}: {e}",
+        )
+    background_tasks.add_task(_bg_repair_all)
+    return {
+        "ok": True,
+        "accepted": True,
+        "incomplete_user_count": len(uids),
+        "user_ids": uids,
+        "hint": "后台串行补跑,进度看 api 日志;完成后再调 /pipeline/incomplete 应返 0",
+    }

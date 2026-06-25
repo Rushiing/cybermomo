@@ -14,14 +14,14 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent_chat.engine import run_agent_chat
 from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.match import service as match_service
 from src.match.desensitize import run_desensitize_for_match
-from src.match.models import Match
+from src.match.models import Match, MatchHook, Matchpoint
 from src.shared.db import SessionLocal
 from src.summary.engine import run_summary_for_chat
 from src.summary.models import Summary
@@ -97,6 +97,158 @@ async def run_full_pipeline_for_user(user_id: int) -> None:
                 print(f"[pipeline] summary failed chat_id={chat_id}: {e}")
 
     print(f"[pipeline] done for user_id={user_id}: {len(new_matches)} matches, {len(chat_ids)} chats")
+
+
+# ========================================
+# 续跑半成品 pipeline(audit P0-4 / codex stab-P0-1)
+# ========================================
+#
+# 问题:run_full_pipeline_for_user 以 run_matching 起步,只建"新 match";部署中断/
+# LLM 失败后,已建 match 但缺 hook/chat/summary 的用户,重跑会被 _existing_match_partners
+# 过滤成 new_matches=[] → 直接 return,"重跑接着干"不成立。
+#
+# 本函数按 **stage** 补:扫该 user 全部 match,缺哪步补哪步,不依赖"新 match"。
+# 幂等:每步前先查是否已有产物,有就跳过。
+
+async def resume_incomplete_pipeline_for_user(user_id: int) -> dict:
+    """
+    扫某 user 的所有 match,补齐缺失的 desensitize / agent_chat / summary。
+    返回报告 dict。不抛(单步失败记 error 继续)。
+    """
+    report: dict = {
+        "user_id": user_id,
+        "matches": 0,
+        "desensitize_run": 0,
+        "agent_chat_run": 0,
+        "summary_run": 0,
+        "skipped_running": 0,
+        "errors": [],
+    }
+
+    # 1) 拉该 user 所有 match
+    async with SessionLocal() as db:
+        matches = (await db.execute(
+            select(Match).where(
+                or_(Match.user_a_id == user_id, Match.user_b_id == user_id)
+            )
+        )).scalars().all()
+        match_ids = [m.id for m in matches]
+    report["matches"] = len(match_ids)
+    if not match_ids:
+        return report
+
+    for match_id in match_ids:
+        # --- Stage A: 缺 hook 且有 matchpoint → 补 desensitize ---
+        try:
+            async with SessionLocal() as db:
+                hook_n = (await db.execute(
+                    select(func.count()).select_from(MatchHook)
+                    .where(MatchHook.match_id == match_id)
+                )).scalar_one()
+                mp_n = (await db.execute(
+                    select(func.count()).select_from(Matchpoint)
+                    .where(Matchpoint.match_id == match_id)
+                )).scalar_one()
+                if hook_n == 0 and mp_n > 0:
+                    match = (await db.execute(
+                        select(Match).where(Match.id == match_id)
+                    )).scalar_one_or_none()
+                    if match is not None:
+                        await run_desensitize_for_match(db, match=match)
+                        report["desensitize_run"] += 1
+        except Exception as e:
+            report["errors"].append({"stage": "desensitize", "match_id": match_id,
+                                     "error": f"{type(e).__name__}: {e}"})
+
+        # --- Stage B: 有 hook、无 done chat、无 running chat → 补 agent_chat ---
+        try:
+            async with SessionLocal() as db:
+                hook_n = (await db.execute(
+                    select(func.count()).select_from(MatchHook)
+                    .where(MatchHook.match_id == match_id)
+                )).scalar_one()
+                chats = (await db.execute(
+                    select(AgentChat).where(AgentChat.match_id == match_id)
+                )).scalars().all()
+                has_done = any("done" in (c.status or "") for c in chats)
+                has_running = any(c.status == "running" for c in chats)
+                if hook_n > 0 and not has_done and not has_running:
+                    match = (await db.execute(
+                        select(Match).where(Match.id == match_id)
+                    )).scalar_one_or_none()
+                    if match is not None:
+                        chat = await run_agent_chat(db, match=match)
+                        match.status = ("agent_chat_done"
+                                        if "done" in (chat.status or "")
+                                        else "agent_chat_running")
+                        await db.commit()
+                        report["agent_chat_run"] += 1
+                elif has_running:
+                    report["skipped_running"] += 1
+        except Exception as e:
+            report["errors"].append({"stage": "agent_chat", "match_id": match_id,
+                                     "error": f"{type(e).__name__}: {e}"})
+
+        # --- Stage C: done chat 无 summary → 补 summary ---
+        try:
+            async with SessionLocal() as db:
+                done_chats = (await db.execute(
+                    select(AgentChat).where(
+                        AgentChat.match_id == match_id,
+                        AgentChat.status.in_(["done_natural", "done_terminated"]),
+                    )
+                )).scalars().all()
+                for chat in done_chats:
+                    sum_n = (await db.execute(
+                        select(func.count()).select_from(Summary)
+                        .where(Summary.agent_chat_id == chat.id)
+                    )).scalar_one()
+                    if sum_n == 0:
+                        await run_summary_for_chat(db, chat=chat)
+                        report["summary_run"] += 1
+        except Exception as e:
+            report["errors"].append({"stage": "summary", "match_id": match_id,
+                                     "error": f"{type(e).__name__}: {e}"})
+
+    print(f"[pipeline-resume] user={user_id}: {report}")
+    return report
+
+
+async def find_users_with_incomplete_pipeline() -> list[int]:
+    """
+    只读:找"有 match 但有 match 缺 summary"的 user_id 列表(诊断 + repair-all 用)。
+    判定:某 match 双方应各有 summary;只要该 match 关联的 done chat 有 0 summary,
+    或 match 有 hook 却没 done chat,就算未完成。简化版:扫所有 match,任一未达
+    "有 done chat 且该 chat 有 summary",其涉及的两个 user 都标未完成。
+    """
+    incomplete_users: set[int] = set()
+    async with SessionLocal() as db:
+        matches = (await db.execute(select(Match))).scalars().all()
+        for m in matches:
+            mp_n = (await db.execute(
+                select(func.count()).select_from(Matchpoint)
+                .where(Matchpoint.match_id == m.id)
+            )).scalar_one()
+            if mp_n == 0:
+                continue  # 没 matchpoint 的 match 本就不产 hook/chat/summary,跳过
+            # 有 done chat 且其有 summary?
+            done_chats = (await db.execute(
+                select(AgentChat.id).where(
+                    AgentChat.match_id == m.id,
+                    AgentChat.status.in_(["done_natural", "done_terminated"]),
+                )
+            )).scalars().all()
+            complete = False
+            if done_chats:
+                sum_n = (await db.execute(
+                    select(func.count()).select_from(Summary)
+                    .where(Summary.agent_chat_id.in_(done_chats))
+                )).scalar_one()
+                complete = sum_n > 0
+            if not complete:
+                incomplete_users.add(m.user_a_id)
+                incomplete_users.add(m.user_b_id)
+    return sorted(incomplete_users)
 
 
 # ========================================
