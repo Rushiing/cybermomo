@@ -61,7 +61,7 @@ export default function RoomPage() {
         clearInterval(id)
         return
       }
-      void loadAll()
+      void loadAll({ silent: true })
     }, POLL_INTERVAL_MS)
     return () => clearInterval(id)
   }, [])
@@ -71,8 +71,9 @@ export default function RoomPage() {
     return () => clearTimeout(t)
   }, [notice])
 
-  async function loadAll() {
-    setLoading(true)
+  async function loadAll(opts?: { silent?: boolean }) {
+    // silent:轮询 / 决策后的补刷不弹整页"加载中",只首屏 load 显 spinner
+    if (!opts?.silent) setLoading(true)
     try {
       const [s, sums, ss] = await Promise.all([
         api.get<RoomStatusResponse>("/api/room/status"),
@@ -91,11 +92,24 @@ export default function RoomPage() {
 
   async function decide(summaryId: number, decision: DecisionRequest["decision"]) {
     setActionPending(summaryId)
+    // 乐观更新:丢 / 再派 点下去立刻把卡片翻成"已决策",点击零延迟感;
+    // 服务端 decision POST 在后台跑(Railway 上 ~几秒),失败再回滚。
+    // open_human_chat 不乐观 —— 它成功要带服务端建的 session 跳走,等返回更稳妥。
+    const snapshot = summaries
+    if (decision === "drop" || decision === "re_dispatch") {
+      setSummaries(prev => prev.map(s =>
+        s.id === summaryId ? { ...s, user_decision: decision } : s
+      ))
+    }
     try {
-      await api.post<SummaryResponse, DecisionRequest>(
+      const updated = await api.post<SummaryResponse, DecisionRequest>(
         `/api/summary/${summaryId}/decision`,
         { decision },
       )
+      // decision 端点已返回更新后的卡片 → 就地替换这一张(权威值覆盖乐观值),
+      // 不再整房间重拉(省掉点击后那次 ~4s 的 GET /summary/me + 整页"加载中"闪烁)
+      setSummaries(prev => prev.map(s => (s.id === summaryId ? updated : s)))
+
       // 如果是开聊,试着创建 session 然后跳过去
       if (decision === "open_human_chat") {
         try {
@@ -110,12 +124,12 @@ export default function RoomPage() {
       if (decision === "drop") setNotice("已丢。这个人以后不会再被推给你。")
       if (decision === "re_dispatch") {
         setNotice("收到 — 我去换个话题再跟 TA 聊一场,大概一分钟回来跟你交底。")
-        // 后台 BackgroundTask 还在跑,稍后刷新拿新简报
-        setTimeout(() => { void loadAll() }, 30_000)
-        setTimeout(() => { void loadAll() }, 75_000)
+        // 后台 BackgroundTask 还在跑,稍后静默刷新拿新简报(不弹整页 loading)
+        setTimeout(() => { void loadAll({ silent: true }) }, 30_000)
+        setTimeout(() => { void loadAll({ silent: true }) }, 75_000)
       }
-      await loadAll()
     } catch (e: any) {
+      setSummaries(snapshot)  // 乐观更新回滚
       setNotice(`决策失败:${e?.detail || e?.message}`)
     } finally {
       setActionPending(null)
