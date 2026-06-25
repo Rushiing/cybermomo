@@ -59,7 +59,15 @@ def _get_client() -> AsyncOpenAI:
     api_key = settings.effective_dashscope_key
     if not api_key:
         raise RuntimeError("DASHSCOPE_API_KEY(或 GLM_API_KEY)未配置")
-    _client = AsyncOpenAI(api_key=api_key, base_url=DASHSCOPE_BASE_URL)
+    # 显式 timeout=60s(audit P0-5a):AsyncOpenAI 默认 600s,DashScope 卡住时单次
+    # call 能挂 10 分钟还占着 DB 连接 → worker stall 根源。60s 足够 deepseek-v4-flash,
+    # 超时直接失败重试好过挂死。max_retries=2 对 429/5xx/timeout 做有限指数退避重试。
+    _client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=DASHSCOPE_BASE_URL,
+        timeout=60.0,
+        max_retries=2,
+    )
     return _client
 
 

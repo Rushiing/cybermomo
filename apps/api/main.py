@@ -45,11 +45,47 @@ def _init_sentry() -> None:
         print(f"[startup] Sentry init 失败: {e}")
 
 
+_DEFAULT_JWT_SECRET = "dev-jwt-secret-not-for-prod-replace-me"
+
+
+def _assert_prod_config_safe() -> None:
+    """
+    非 dev 环境启动时 fail-fast 校验关键安全配置。
+
+    背景(audit-2026-06 P0-3):所有配置都有默认值,`env` 默认 dev → `is_dev=True`
+    会启用 X-Mock-User-Id 越权 + 非 Secure cookie + 默认 JWT secret。一次 env 丢失
+    (新 deploy / fork / 误清变量)就静默全站敞开。这里把"配置错"从"静默不安全"
+    变成"启动即 crash",逼运维补齐。
+    """
+    settings = get_settings()
+    if settings.is_dev:
+        return  # dev 环境允许宽松配置
+
+    problems: list[str] = []
+    if settings.jwt_secret == _DEFAULT_JWT_SECRET or len(settings.jwt_secret) < 16:
+        problems.append("JWT_SECRET 仍是默认值或过短(需 ≥16 字符的随机串)")
+    if not settings.admin_secret:
+        problems.append("ADMIN_SECRET 未设置")
+    if any("localhost" in o or "127.0.0.1" in o for o in settings.cors_origins_list):
+        problems.append(f"CORS_ORIGINS 含 localhost(当前:{settings.cors_origins_list})")
+    if not settings.cors_origins_list:
+        problems.append("CORS_ORIGINS 为空")
+
+    if problems:
+        msg = (
+            f"[startup] 生产配置不安全,拒绝启动(env={settings.env}):\n  - "
+            + "\n  - ".join(problems)
+        )
+        raise RuntimeError(msg)
+    print(f"[startup] 生产配置校验通过 · env={settings.env}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     print(f"[startup] CyberMOMO API · env={settings.env}")
     print(f"[startup] CORS origins: {settings.cors_origins_list}")
+    _assert_prod_config_safe()  # 非 dev 配置不安全直接 crash
     _init_sentry()
     yield
     print("[shutdown] CyberMOMO API")

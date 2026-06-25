@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     session_cookie_name: str = Field(default="cm_session")
     session_max_age: int = Field(default=30 * 24 * 3600)
 
+    # X-Mock-User-Id 越权 fallback 的独立开关(audit P0-3)。
+    # 默认 None → 跟随 is_dev(dev 开、prod 关);可显式设 false 即使在 dev 也强制关。
+    # 不让 mock-auth 搭 is_dev 便车,多一道保险。
+    enable_mock_auth: bool | None = Field(default=None)
+
     # Auth · Google OAuth
     google_oauth_client_id: str = Field(default="")
     google_oauth_client_secret: str = Field(default="")
@@ -81,6 +86,13 @@ class Settings(BaseSettings):
     @property
     def is_dev(self) -> bool:
         return self.env == "dev"
+
+    @property
+    def mock_auth_enabled(self) -> bool:
+        """X-Mock-User-Id fallback 是否启用。显式 enable_mock_auth 优先,否则跟随 is_dev。"""
+        if self.enable_mock_auth is not None:
+            return self.enable_mock_auth
+        return self.is_dev
 
     @property
     def effective_dashscope_key(self) -> str:

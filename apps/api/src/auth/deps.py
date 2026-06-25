@@ -36,23 +36,24 @@ async def get_current_user(
     # 用 joinedload eager-load profile,这样 /api/auth/me 不用再发第二条 SQL
     uid_from_cookie = read_session_user_id(request)
     if uid_from_cookie is not None:
+        # deleted_at IS NULL:被删/被封用户即使 JWT 未过期也立刻失效(audit P1-10,铁律1)
         user = (
             await db.execute(
                 select(User)
                 .options(joinedload(User.profile))
-                .where(User.id == uid_from_cookie)
+                .where(User.id == uid_from_cookie, User.deleted_at.is_(None))
             )
         ).unique().scalar_one_or_none()
         if user is not None:
             return user
-        # cookie 解出 user_id 但 db 里没这人(账户被删?)
+        # cookie 解出 user_id 但 db 里没这人 / 已被删(deleted_at 非空)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="session 关联的用户不存在(可能已删账户)",
         )
 
-    # 2. dev fallback:X-Mock-User-Id 头(prod 直接返 401)
-    if not settings.is_dev:
+    # 2. dev fallback:X-Mock-User-Id 头(mock_auth_enabled=False 直接返 401)
+    if not settings.mock_auth_enabled:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录",
