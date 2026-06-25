@@ -30,6 +30,53 @@ const INTENT_LABEL: Record<string, string> = {
   wrap: "收尾",
 }
 
+// 内部信号 → 用户语言。给宿主看的是"你的 Agent 这轮的感受",不暴露字段名/字面值。
+// rewrite_level(改写程度)是生成过程的 meta,对真人无意义,不展示。
+type SignalTone = "up" | "down" | "neutral" | "warn"
+
+const TONE_CLASS: Record<SignalTone, string> = {
+  up: "bg-primary-soft text-primary-dark",
+  down: "bg-bg-soft text-ink-secondary",
+  neutral: "bg-bg-soft text-ink-tertiary",
+  warn: "bg-warn-soft text-warn",
+}
+
+function ownSignalsFriendly(sig: Record<string, any>): { label: string; tone: SignalTone }[] {
+  const out: { label: string; tone: SignalTone }[] = []
+
+  // 好感变化
+  if (sig.warmth_delta === 1) out.push({ label: "对 ta 更有好感", tone: "up" })
+  else if (sig.warmth_delta === -1) out.push({ label: "对 ta 好感降了点", tone: "down" })
+  else if (sig.warmth_delta === 0) out.push({ label: "好感持平", tone: "neutral" })
+
+  // 话题兴趣(0 = 一般,不展示以免噪音)
+  if (sig.topic_interest === 1) out.push({ label: "聊得来劲", tone: "up" })
+  else if (sig.topic_interest === -1) out.push({ label: "对话题没什么兴趣", tone: "down" })
+
+  // 自我披露深度
+  const disclosure: Record<number, { label: string; tone: SignalTone }> = {
+    0: { label: "没怎么敞开自己", tone: "neutral" },
+    1: { label: "浅聊了下自己", tone: "neutral" },
+    2: { label: "聊得比较深", tone: "up" },
+    3: { label: "聊得很坦诚", tone: "up" },
+  }
+  if (sig.disclosure_level != null && disclosure[sig.disclosure_level]) {
+    out.push(disclosure[sig.disclosure_level])
+  }
+
+  // 碰到边界
+  const boundary: Record<string, string> = {
+    价值观: "感觉价值观不太合",
+    隐私: "碰到隐私话题,收住了",
+    铁律: "触发了平台底线",
+  }
+  if (sig.boundary_hit) {
+    out.push({ label: boundary[sig.boundary_hit] || "碰到了边界", tone: "warn" })
+  }
+
+  return out
+}
+
 export default function AgentChatViewer({ summaryId, open, onClose }: Props) {
   const [data, setData] = useState<AgentChatViewResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -120,7 +167,7 @@ export default function AgentChatViewer({ summaryId, open, onClose }: Props) {
         {/* Footer hint */}
         <div className="px-6 py-3 border-t border-line-soft flex-shrink-0">
           <p className="text-xs text-ink-tertiary leading-relaxed">
-            🔒 这是只给你的回放 — 对方 Agent 的内部信号(好感度变化、披露度等)按铁律不展示。
+            🔒 这是只给你的回放 — 对方 Agent 的小心思(好感变化、聊得多深这些)按铁律不展示。
           </p>
         </div>
       </div>
@@ -155,14 +202,28 @@ function MessageBubble({ m }: { m: AgentChatMessageView }) {
         }`}>
           {m.utterance}
         </div>
-        {m.own_private_signals && (
-          <details className="text-[11px] text-ink-tertiary px-1 mt-0.5">
-            <summary className="cursor-pointer hover:text-ink-secondary">看你 Agent 的内部信号</summary>
-            <div className="bg-bg-soft rounded-md p-2 mt-1 font-mono text-[10px] whitespace-pre-wrap">
-              {JSON.stringify(m.own_private_signals, null, 2)}
-            </div>
-          </details>
-        )}
+        {(() => {
+          if (!m.own_private_signals) return null
+          const signals = ownSignalsFriendly(m.own_private_signals)
+          if (signals.length === 0) return null
+          return (
+            <details className="text-[11px] text-ink-tertiary px-1 mt-0.5">
+              <summary className="cursor-pointer hover:text-ink-secondary select-none">
+                你的 Agent 这轮的小心思
+              </summary>
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {signals.map((s, i) => (
+                  <span
+                    key={i}
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] ${TONE_CLASS[s.tone]}`}
+                  >
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )
+        })()}
       </div>
     </div>
   )
