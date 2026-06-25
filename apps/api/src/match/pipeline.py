@@ -24,7 +24,7 @@ from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.match import service as match_service
 from src.match.desensitize import run_desensitize_for_match
 from src.match.models import Match, MatchHook, Matchpoint
-from src.shared.db import SessionLocal
+from src.shared.db import SessionLocal, engine
 from src.summary.engine import run_summary_for_chat
 from src.summary.models import Summary
 
@@ -220,13 +220,22 @@ async def resume_incomplete_pipeline_for_user(user_id: int) -> dict:
 
         # --- Stage B: 有 hook、无"真 done chat"、无活跃 running → 补 agent_chat ---
         # "真 done chat" = done 且有 ≥1 条消息(stale 标掉的空僵尸不算,要重开)。
-        # advisory lock 防并发(两个 repair / repair vs 正常 pipeline)重复建 chat(P0-3)。
+        #
+        # 并发兜底(codex 终审 P0-3):用一条**专用连接**持事务级 pg_advisory_xact_lock,
+        # 把 check-and-create 整段包住,跨进程/worker(repair-one vs repair-all)互斥。
+        # 为什么不能用 ORM session 级锁:run_agent_chat 内部多次 commit(),每次 commit 会把
+        # session 的连接还回池 —— session 级 advisory lock 绑定的是 PG backend(连接),
+        # 连接一还池锁就被带走/泄漏,后续 unlock 还跑在别的连接上,等于没锁。
+        # xact 锁绑在专用连接的事务上,事务全程不提交(engine.begin() 的 async with 体内
+        # 一直开着),直到本段结束才提交释放;进程崩了连接断 → PG 自动释放,不泄漏。
+        # 注:run_agent_chat 用的是另开的 SessionLocal 连接,与 lock_conn 互不干扰。
         try:
-            async with SessionLocal() as db:
-                # session 级 advisory lock(跨内部 commit 持有,直到本 session 结束)
-                await db.execute(text("SELECT pg_advisory_lock(:ns, :k)")
-                                 .bindparams(ns=_RESUME_LOCK_NS, k=match_id))
-                try:
+            async with engine.begin() as lock_conn:
+                await lock_conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:ns, :k)")
+                    .bindparams(ns=_RESUME_LOCK_NS, k=match_id)
+                )
+                async with SessionLocal() as db:
                     hook_n = (await db.execute(
                         select(func.count()).select_from(MatchHook)
                         .where(MatchHook.match_id == match_id)
@@ -257,9 +266,7 @@ async def resume_incomplete_pipeline_for_user(user_id: int) -> dict:
                             report["agent_chat_run"] += 1
                     elif has_active_running:
                         report["skipped_running"] += 1
-                finally:
-                    await db.execute(text("SELECT pg_advisory_unlock(:ns, :k)")
-                                     .bindparams(ns=_RESUME_LOCK_NS, k=match_id))
+            # 退出 engine.begin():lock_conn 事务提交 → xact 锁释放
         except Exception as e:
             report["errors"].append({"stage": "agent_chat", "match_id": match_id,
                                      "error": f"{type(e).__name__}: {e}"})
@@ -278,9 +285,10 @@ async def resume_incomplete_pipeline_for_user(user_id: int) -> dict:
                         continue  # 空僵尸不产简报
                     have = await _summary_hosts(db, chat.id)
                     if {ua, ub} - have:  # 有 host 缺简报
-                        # run_summary_for_chat 已 per-host 幂等,只补缺的一侧
-                        await run_summary_for_chat(db, chat=chat)
-                        report["summary_run"] += 1
+                        # run_summary_for_chat 已 per-host 幂等,只补缺的一侧;
+                        # 按真正新建的简报数计(LLM 失败/缺 profile 时不虚报,codex 终审 P2)
+                        new = await run_summary_for_chat(db, chat=chat)
+                        report["summary_run"] += len(new)
         except Exception as e:
             report["errors"].append({"stage": "summary", "match_id": match_id,
                                      "error": f"{type(e).__name__}: {e}"})

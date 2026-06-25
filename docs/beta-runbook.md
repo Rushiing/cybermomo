@@ -53,6 +53,15 @@ curl -sS -H "X-Admin-Secret: $SECRET" "$BASE/api/admin/pipeline/incomplete"
 
 补跑是**按 stage 幂等**的:缺 hook 补脱敏、缺 done chat 补互聊、done chat 缺 summary 补简报;已有产物的跳过。重跑安全。
 
+补跑内部并发(repair-one vs repair-all、跨 worker)由每个 match 的 `pg_advisory_xact_lock` 串行化,补跑之间不会重复建互聊。
+
+> ⚠️ **已知局限(codex 终审 P0,档 B 闭环)**:补跑的建 chat 锁只覆盖补跑这条路;
+> **正常 onboarding pipeline 建 chat 没拿同一把锁**。所以理论上"某新用户 onboarding 正在跑互聊"
+> 与"同一刻 admin 对这个 match 手动 repair"会撞车、可能重复建一场互聊(只是浪费一次 LLM,
+> 不会脏数据/泄露)。内测期规避:**别在拉新开闸/有用户正在 onboarding 时跑 repair-all**;
+> 先 `GET /pipeline/incomplete` 看清单,挑空窗补。公开发布前(档 B)把三处建 chat 入口
+> (normal pipeline / redispatch / repair)统一收口到一个带锁的 create helper。
+
 ---
 
 ## 3 · 平台底线封禁(人工 · 内测临时方案)

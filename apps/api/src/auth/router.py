@@ -480,6 +480,9 @@ async def _upsert_user_from_google(
             await db.execute(select(User).where(User.google_sub == google_sub))
         ).scalar_one_or_none()
         if user is not None:
+            # re-fetch 到的也可能是软删用户(codex 终审 P2):同样拒绝,别绕过封禁
+            if user.deleted_at is not None:
+                raise AccountDeletedError()
             return user
         # 不是并发 — 是真的 INSERT 失败(NOT NULL / CHECK / 其它 UNIQUE)
         # 把底层 SQL 错误 surface 出来,前端能看
