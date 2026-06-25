@@ -10,7 +10,7 @@ v3 profile JSON 的 Pydantic schema
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ========================================
@@ -35,14 +35,27 @@ class ProfileMeta(BaseModel):
 
 
 class ProfileDomains(BaseModel):
-    interested: list[str]
-    avoided: list[str]
+    """
+    兴趣 / 回避领域。**必须是 ALLOWED_DOMAINS 闭集**(audit P0-1a):
+    domains 会进 desensitize prompt 并影响匹配,客户端塞自由文本 = 注入 / .md 外泄面。
+    """
+    interested: list[str] = Field(max_length=21)
+    avoided: list[str] = Field(max_length=21)
+
+    @field_validator("interested", "avoided")
+    @classmethod
+    def _only_allowed_domains(cls, v: list[str]) -> list[str]:
+        bad = [d for d in v if d not in ALLOWED_DOMAINS]
+        if bad:
+            raise ValueError(f"非法领域(不在 ALLOWED_DOMAINS):{bad}")
+        return v
 
 
 class TaggedDimension(BaseModel):
     """tag 型维度(CMM1 / CMM2 / CMM3)"""
-    label: str
-    code: str
+    # label/code 会进 desensitize 的 "safe summary" prompt,加长度上限防注入(audit P0-1a/P1-11)
+    label: str = Field(max_length=40)
+    code: str = Field(max_length=64)
     option_index: int = Field(ge=1)
     score: Optional[int] = Field(default=None, ge=0, le=100)
 
@@ -87,19 +100,41 @@ class ProfileAgency(BaseModel):
 
 
 class ProfilePortrait(BaseModel):
-    """生成的人格画像 — 文段 + 标题 + 标签 + debug"""
-    title: str
-    main_type: str
-    title_reason: str
-    core_tension: str
-    tags: list[str]
-    body: list[str]
+    """生成的人格画像 — 文段 + 标题 + 标签 + debug
+
+    自由文本字段全部加长度/数量上限(audit P0-1a/P1-11):portrait 会进 agent_chat
+    speaker prompt,无上限时可被塞进 .md 原文 / 联系方式 / prompt 注入。
+    debug 是规则引擎中间产物,不进 LLM(_summarize 会剥),也限制大小防 DB 膨胀。
+    """
+    title: str = Field(max_length=100)
+    main_type: str = Field(max_length=100)
+    title_reason: str = Field(max_length=600)
+    core_tension: str = Field(max_length=600)
+    tags: list[str] = Field(default_factory=list, max_length=16)
+    body: list[str] = Field(default_factory=list, max_length=12)
     debug: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tags")
+    @classmethod
+    def _cap_tag_len(cls, v: list[str]) -> list[str]:
+        for t in v:
+            if len(t) > 40:
+                raise ValueError("单个 tag 过长(>40)")
+        return v
+
+    @field_validator("body")
+    @classmethod
+    def _cap_body_len(cls, v: list[str]) -> list[str]:
+        for p in v:
+            if len(p) > 800:
+                raise ValueError("单段 portrait body 过长(>800)")
+        return v
 
 
 class RawAnswer(BaseModel):
     option_index: Optional[int] = None
-    option_text: Optional[str] = None
+    # 问卷选项文本,加上限防塞 payload(audit P1-11)
+    option_text: Optional[str] = Field(default=None, max_length=500)
 
 
 # ========================================

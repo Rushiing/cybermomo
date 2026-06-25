@@ -32,6 +32,7 @@ from src.llm.types import Message
 from src.match.desensitize import _parse_loose_json
 from src.match.models import Match, MatchHook
 from src.md.models import MdDocument
+from src.shared.leak_scanner import scrub_peer_visible_text
 from src.shared.peer_prompt import format_peer_block
 
 
@@ -150,8 +151,15 @@ def _format_history_for_speaker(
     return json.dumps(lines, ensure_ascii=False, indent=2)
 
 
+def _portrait_without_debug(profile_json: dict) -> dict:
+    """portrait 去掉 debug(规则引擎中间产物,不进 LLM,且可能含敏感推导,audit P0-1)"""
+    p = dict(profile_json.get("portrait") or {})
+    p.pop("debug", None)
+    return p
+
+
 def _summarize_md_for_prompt(profile_json: dict) -> dict:
-    """传给 Agent 的 .md 摘要 — 不传超大 raw_answers"""
+    """传给 Agent 的 .md 摘要 — 不传超大 raw_answers、不传 portrait.debug"""
     return {
         "domains": profile_json.get("domains", {}),
         "dialogue": profile_json.get("dialogue", {}),
@@ -161,7 +169,7 @@ def _summarize_md_for_prompt(profile_json: dict) -> dict:
         "conflict_repair": profile_json.get("conflict_repair", {}),
         "exploration": profile_json.get("exploration", {}),
         "agency": profile_json.get("agency", {}),
-        "portrait": profile_json.get("portrait", {}),
+        "portrait": _portrait_without_debug(profile_json),
     }
 
 
@@ -290,6 +298,19 @@ async def run_agent_chat(
             end_reason = "parse_error"
             break
 
+        # 确定性兜底(audit P0-1):speaker 的 utterance 会被对方读到,不能照抄
+        # speaker 自己的 .md 原文(portrait/raw_answer 等)。命中则置空该句,
+        # 避免原文穿透;Agent 互聊靠人格化表达,丢一句不影响判断。
+        raw_utterance = str(data.get("utterance", ""))[:2000]
+        safe_utterance, leaked = scrub_peer_visible_text(
+            raw_utterance, profile_by_user.get(speaker_user_id, {})
+        )
+        if leaked:
+            print(
+                f"[agent_chat] utterance 命中宿主 .md 片段,置空 "
+                f"chat_id={chat.id} turn={turn} speaker={speaker_user_id} frag={leaked!r}"
+            )
+
         # 落 message
         msg = AgentChatMessage(
             agent_chat_id=chat.id,
@@ -297,7 +318,7 @@ async def run_agent_chat(
             turn=turn,
             topic_ref=str(data.get("topic_ref", "")),
             intent=str(data.get("intent", "share")),
-            utterance=str(data.get("utterance", ""))[:2000],
+            utterance=safe_utterance,
             public_signals=data.get("public_signals", {}),
             private_signals=data.get("private_signals", {}),
             topic_close_payload=data.get("topic_close_payload"),

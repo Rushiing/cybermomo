@@ -82,9 +82,11 @@ CONTEXT_TEMPLATE = """\
 
 
 def _summarize_profile(profile_json: dict) -> dict:
-    """从 profile_json 拎出给 Agent 看的核心切片(不传超大 raw_answers)"""
+    """从 profile_json 拎出给 Agent 看的核心切片(不传超大 raw_answers、不传 portrait.debug)"""
+    portrait = dict(profile_json.get("portrait") or {})
+    portrait.pop("debug", None)  # 规则引擎中间产物,不进 LLM(audit P0-1)
     return {
-        "portrait": profile_json.get("portrait", {}),
+        "portrait": portrait,
         "domains": profile_json.get("domains", {}),
         "dialogue": profile_json.get("dialogue", {}),
         "relationship_warmth": profile_json.get("relationship_warmth", {}),

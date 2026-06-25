@@ -23,6 +23,7 @@ from src.llm.gateway import llm_chat
 from src.llm.types import Message
 from src.match.models import Match, Matchpoint, MatchHook
 from src.md.models import MdDocument
+from src.shared.leak_scanner import scrub_peer_visible_text
 
 
 SYSTEM_PROMPT = """\
@@ -205,14 +206,25 @@ async def run_desensitize_for_match(
         return []
 
     new_hooks: list[MatchHook] = []
-    for target_user_id, key in [
-        (match.user_a_id, "hooks_for_a"),
-        (match.user_b_id, "hooks_for_b"),
+    for target_user_id, peer_user_id, key in [
+        (match.user_a_id, match.user_b_id, "hooks_for_a"),
+        (match.user_b_id, match.user_a_id, "hooks_for_b"),
     ]:
+        # hook 给 target 看,绝不能含 peer 的 .md 原文(铁律3)。拿 peer 完整 profile 扫。
+        peer_profile = profile_by_user.get(peer_user_id, {})
         for h in parsed.get(key, []):
             ref_idx = h.get("matchpoint_ref")
             if ref_idx is None or not (0 <= ref_idx < len(mps)):
                 continue
+            raw_hook_text = str(h.get("hook_text", ""))[:1000]
+            # 确定性兜底(audit P0-1):LLM 不照抄是自律,这里做硬拦截
+            safe_text, leaked = scrub_peer_visible_text(raw_hook_text, peer_profile)
+            if leaked:
+                print(
+                    f"[desensitize] hook_text 命中对方 .md 片段,丢弃 "
+                    f"match_id={match.id} target={target_user_id} frag={leaked!r}"
+                )
+                continue  # 丢弃这条 hook,不让原文穿透给对方
             sensitivity = int(h.get("sensitivity_level", 0))
             sensitivity = max(0, min(2, sensitivity))
             hook = MatchHook(
@@ -222,7 +234,7 @@ async def run_desensitize_for_match(
                 topic_id=str(h.get("topic_id", f"topic_{ref_idx}")),
                 category=str(h.get("category", mps[ref_idx].category)),
                 match_type=str(h.get("match_type", mps[ref_idx].match_type)),
-                hook_text=str(h.get("hook_text", ""))[:1000],
+                hook_text=safe_text,
                 sensitivity_level=sensitivity,
             )
             db.add(hook)
