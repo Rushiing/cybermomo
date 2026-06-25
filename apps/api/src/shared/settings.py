@@ -89,10 +89,18 @@ class Settings(BaseSettings):
 
     @property
     def mock_auth_enabled(self) -> bool:
-        """X-Mock-User-Id fallback 是否启用。显式 enable_mock_auth 优先,否则跟随 is_dev。"""
+        """X-Mock-User-Id fallback 是否启用。
+
+        codex review 抓的 P0-b:非 dev **永远关**,不给任何 env 开关机会
+        (即使误设 ENABLE_MOCK_AUTH=true 也不生效)。dev 下显式 enable_mock_auth
+        优先,否则默认开(本地联调)。配合 Dockerfile 烤进 ENV=prod,部署镜像
+        ENV 丢失时仍是 prod → 这里返 False → 无越权 fallback。
+        """
+        if not self.is_dev:
+            return False
         if self.enable_mock_auth is not None:
             return self.enable_mock_auth
-        return self.is_dev
+        return True
 
     @property
     def effective_dashscope_key(self) -> str:

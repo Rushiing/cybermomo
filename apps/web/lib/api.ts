@@ -11,10 +11,11 @@
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || ""
 
-// 仅 dev 模式打开 mock auth header — prod build 时 NEXT_PUBLIC_DEV_MOCK_AUTH 不设
-// 就不会发出 X-Mock-User-Id,完全依赖 cookie
+// 仅 dev 模式打开 mock auth header。默认 false(codex review P1-6):本地联调要
+// 显式设 NEXT_PUBLIC_DEV_MOCK_AUTH=true,否则不发 X-Mock-User-Id,完全依赖 cookie。
+// 之前默认 "true",非 Docker / 漏 env 的 build 会误发 mock header。
 const DEV_MOCK_AUTH =
-  (process.env.NEXT_PUBLIC_DEV_MOCK_AUTH || "true").toLowerCase() === "true"
+  (process.env.NEXT_PUBLIC_DEV_MOCK_AUTH || "false").toLowerCase() === "true"
 
 const MOCK_USER_KEY = "cybermomo_mock_user_id"
 

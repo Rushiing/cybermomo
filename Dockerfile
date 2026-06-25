@@ -28,6 +28,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 # 再 COPY 业务代码(改代码不会让 pip 缓存失效)
 COPY apps/api/ ./
 
+# 安全(audit P0-3 + codex P0-a):部署镜像默认 ENV=prod。
+# 这样 Railway 的 ENV 变量即使丢失,容器仍是 prod → 启动守卫触发严格校验、
+# mock-auth 永远关。本地裸跑 uvicorn(不走 Docker)才是 dev 默认。
+# Railway 仍可用变量覆盖(如 staging),但 dev 不会成为线上静默默认值。
+ENV ENV=prod
+
 # Railway 提供 PORT;本地默认 8000
 EXPOSE 8000
 

@@ -17,6 +17,7 @@ shared · .md 原文泄露确定性扫描器(audit P0-1 兜底)
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Iterable
 
 # 命中判定:连续重叠 ≥ 这么多字符就算"照抄原文片段"
@@ -24,12 +25,20 @@ _DEFAULT_NGRAM = 12
 # 提取 profile 自由文本时,短于这个长度的片段不参与比对(避免常见短词误杀)
 _MIN_SOURCE_LEN = 8
 
-_WS_RE = re.compile(r"\s+")
+# 比较态剥掉所有空白 + 常见标点(全/半角),抗"插标点/加空格"绕过(codex review P1-3)
+# 留汉字/字母/数字。NFKC 已把全角折叠成半角,这里统一删非字母数字。
+_STRIP_RE = re.compile(r"[\s\W_]+", re.UNICODE)
 
 
 def _norm(s: str) -> str:
-    """归一:去首尾、内部空白压成单空格、小写。降低绕过空间,不改变中文语义。"""
-    return _WS_RE.sub(" ", (s or "").strip()).lower()
+    """归一(抗绕过):NFKC 折叠全角半角/兼容字符 → 小写 → 删所有空白和标点。
+
+    NFKC 把"１２３/ＡＢＣ/，。！"这类全角折成半角;再删非字母数字,
+    使"微 信 号"、"微.信.号"、"微信号"归一后一致 → 简单插标点/加空格绕不过。
+    只改"比较态",不改落库文本。
+    """
+    nfkc = unicodedata.normalize("NFKC", s or "")
+    return _STRIP_RE.sub("", nfkc).lower()
 
 
 def collect_profile_freetext(profile_json: dict) -> list[str]:

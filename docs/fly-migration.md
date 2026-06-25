@@ -127,10 +127,13 @@ curl -I https://cybermomo-web.fly.dev/
 
 ## 5 · 验证(你做)
 
+> ⚠️ 注:本 fly 迁移是**草稿**,当前决定留在 Railway,未执行。
+
 1. 浏览器打开 `https://cybermomo-web.fly.dev/` 看登录页能不能加载
 2. **从中国大陆 ping 一下延迟**:`ping cybermomo-api.fly.dev`(应该 < 100ms)
 3. 登录跑 happy path,验证简报数据都在(数据 dump/restore 成功)
-4. /api/admin/db-stats 看新 PG 的 max_connections 是多少(可能跟 Railway 不一样,需要重新算 pool)
+4. `psql $DATABASE_URL -c "SHOW max_connections;"` 看新 PG 上限(可能跟 Railway 不一样,需重算 pool)
+   (原 /api/admin/db-stats 临时 endpoint 已在内测前清理删除)
 
 ---
 

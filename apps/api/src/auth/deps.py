@@ -73,11 +73,12 @@ async def get_current_user(
             detail="X-Mock-User-Id 必须是整数",
         )
 
+    # deleted_at IS NULL:mock 路径也过滤被删用户(codex review P0-b,跟 cookie 路径一致)
     user = (
         await db.execute(
             select(User)
             .options(joinedload(User.profile))
-            .where(User.id == uid)
+            .where(User.id == uid, User.deleted_at.is_(None))
         )
     ).unique().scalar_one_or_none()
     if user is not None:

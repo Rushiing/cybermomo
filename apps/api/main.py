@@ -48,18 +48,33 @@ def _init_sentry() -> None:
 _DEFAULT_JWT_SECRET = "dev-jwt-secret-not-for-prod-replace-me"
 
 
+_KNOWN_ENVS = {"dev", "staging", "prod"}
+
+
 def _assert_prod_config_safe() -> None:
     """
-    非 dev 环境启动时 fail-fast 校验关键安全配置。
+    启动时 fail-fast 校验关键安全配置。
 
-    背景(audit-2026-06 P0-3):所有配置都有默认值,`env` 默认 dev → `is_dev=True`
-    会启用 X-Mock-User-Id 越权 + 非 Secure cookie + 默认 JWT secret。一次 env 丢失
-    (新 deploy / fork / 误清变量)就静默全站敞开。这里把"配置错"从"静默不安全"
-    变成"启动即 crash",逼运维补齐。
+    背景(audit P0-3 + codex review P0-a):配置都有默认值,`env` 默认 dev。
+    旧版守卫只在 not is_dev 时校验 → ENV 丢失(默认 dev)恰好【跳过】校验,
+    跟"防 ENV 丢失"的目标相反。
+
+    本版双管:
+    1. env 必须是已知值 {dev,staging,prod},未知值直接 crash(防 typo / 半截配置)。
+    2. 部署侧 Dockerfile 烤进 ENV=prod(见 Dockerfile),所以部署镜像即使 Railway
+       变量丢失,env 仍是 prod → 进入下面的非 dev 严格校验。本地裸跑 uvicorn 才是 dev。
     """
     settings = get_settings()
+
+    if settings.env not in _KNOWN_ENVS:
+        raise RuntimeError(
+            f"[startup] ENV 非法:{settings.env!r},必须是 {_KNOWN_ENVS} 之一。"
+            f"(防止 typo / 配置半截导致静默降级)"
+        )
+
     if settings.is_dev:
-        return  # dev 环境允许宽松配置
+        print(f"[startup] dev 环境,跳过严格配置校验 · env={settings.env}")
+        return
 
     problems: list[str] = []
     if settings.jwt_secret == _DEFAULT_JWT_SECRET or len(settings.jwt_secret) < 16:
@@ -70,6 +85,10 @@ def _assert_prod_config_safe() -> None:
         problems.append(f"CORS_ORIGINS 含 localhost(当前:{settings.cors_origins_list})")
     if not settings.cors_origins_list:
         problems.append("CORS_ORIGINS 为空")
+    # mock-auth 在非 dev 必须关(mock_auth_enabled 已硬保证返 False,这里再断言
+    # 显式配置没有误开,给运维一个明确报错而不是静默忽略)
+    if settings.enable_mock_auth:
+        problems.append("非 dev 环境不允许 ENABLE_MOCK_AUTH=true")
 
     if problems:
         msg = (
