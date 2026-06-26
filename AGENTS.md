@@ -18,23 +18,18 @@
 
 ---
 
-## 2. 当前节点(2026-05-13)
+## 2. 当前节点(2026-06-26)
 
-**冷启动 5 件事**(plan 文件 `~/.claude/plans/binary-prancing-candle.md` 是源)进度:
+> 📍 **最新进展 + 无缝衔接,读 [`docs/handoff-2026-06-26.md`](docs/handoff-2026-06-26.md)** —— 本节是它的摘要。
 
-| Task | 状态 | Commit |
-|---|---|---|
-| 4. 广场 placeholder 降级 | ✅ 已合 | `e91d2cc` |
-| 3. 双轨认证(username+password + Google) | ✅ 已合 | `6c75feb` / `939df59` |
-| 1+2. 反"装" + verdict 分布 + peer demographic | ✅ 已合 | `d04e052` |
-| 5.1 20 mock 用户 archetypes | ✅ 已合 | `aaae9c0` |
-| 5.2 cold_start_seed 脚本 | ✅ 已合 | `1ab5164` |
+**内测前加固(5 P0 全闭环)已全部完成、推上线、部署验证通过**(Batch 1 → 3.5b,codex 终审两轮判可上线)。现在在做"开真人内测前"的小 UX 打磨 + Rush 自己走 happy path 自测。
 
-**后续重心**(按优先级):
-1. CodeX 接 onboarding 任务(见 `docs/codex-onboarding.md`)
-2. 用户线上验证 prompt 校准效果(注册一个号走完 happy path 看 verdict/语气)
-3. 跑 cold_start_seed 把 20 mock 用户灌进 Railway DB
-4. 真人内测拉群
+- 线上 `https://cybermomo-production.up.railway.app`(`/healthz` → `{"ok":true}` 已验);`origin/main = ee748f0`,工作区干净、全部已推已部署。
+- **内测 ops 三铁规矩 + 档 B 延后清单** 看 [`docs/beta-runbook.md`](docs/beta-runbook.md);审计报告看 [`docs/audit-2026-06.md`](docs/audit-2026-06.md)。
+
+**下一步**:happy path 自测 → 开 ~100 人陆续进的真人内测;继续小 UX 打磨(已知待办:互聊回放话题标签还显示 `matchpoint_3` 这种内部 id,待换人话)。
+
+> 冷启动 5 件事(2026-05-13)已全部合入,历史细节见 git log / 旧版本本节。
 
 **不要碰的区域**(除非被明确指派):
 - `legacy/prototype-v0.4/` — 盲测期遗弃代码,只读不动
