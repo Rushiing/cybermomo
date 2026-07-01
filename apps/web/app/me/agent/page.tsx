@@ -25,7 +25,7 @@ const SCOPE_LABEL: Record<string, { label: string; className: string }> = {
 
 function getPeerName(c: AgentConversation): string | null {
   const refs = c.context_refs || {}
-  return refs.peer_nickname || (refs.peer_user_id ? `user_${refs.peer_user_id}` : null)
+  return refs.peer_nickname || (refs.peer_user_id ? "这位用户" : null)
 }
 
 function getState(c: AgentConversation): string | null {
@@ -128,6 +128,7 @@ export default function MyAgentConversationsPage() {
             const scope = SCOPE_LABEL[c.scope] || SCOPE_LABEL.general
             const when = c.last_message_at || c.created_at
             const peerName = getPeerName(c)
+            const peerNickname = c.context_refs?.peer_nickname
             const state = getState(c)
             const stateClass = state === "来电" ? "bg-primary-soft text-primary-dark"
               : state === "不合" ? "bg-bg-soft text-ink-tertiary"
@@ -153,7 +154,7 @@ export default function MyAgentConversationsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       {peerName ? (
-                        <span className="text-[14.5px] font-semibold truncate">@{peerName}</span>
+                        <span className="text-[14.5px] font-semibold truncate">{peerNickname ? `@${peerName}` : peerName}</span>
                       ) : (
                         <span className="text-[14.5px] font-medium text-ink-secondary truncate">{c.title || "跟你的 Agent"}</span>
                       )}

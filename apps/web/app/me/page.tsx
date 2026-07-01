@@ -23,9 +23,7 @@ import {
   type MdDocumentResponse,
   type UpsertProfileRequest,
   type UserMeResponse,
-  getMockUserId,
 } from "@/lib/api"
-import { displayUserId } from "@/lib/userid"
 
 const AGE_OPTIONS = ["18-25", "25-30", "30-35", "35-40", "40+"] as const
 const GENDER_OPTIONS = [
@@ -156,10 +154,10 @@ export default function MePage() {
               <div>
                 <div className="text-xl font-semibold">{me?.profile?.nickname || "未设置昵称"}</div>
                 <div className="text-sm text-ink-secondary">
-                  {me?.profile?.age_band || "—"} · {me?.profile?.gender || "—"} · {me?.profile?.mbti || "—"}
+                  {me?.profile?.age_band || "—"} · {genderDisplay(me?.profile?.gender) || "—"} · {me?.profile?.mbti || "—"}
                 </div>
                 <div className="text-xs text-ink-tertiary mt-1">
-                  {me?.id ? displayUserId(me.id) : `(mock ${getMockUserId()})`} · {me?.email || "—"}
+                  {me?.email || "账号资料未同步"}
                 </div>
               </div>
             </section>
@@ -170,14 +168,14 @@ export default function MePage() {
                 <Card>
                   <div className="text-base font-semibold text-primary-dark mb-2">{md.portrait_title}</div>
                   <div className="text-xs text-ink-tertiary mb-3">
-                    版本 v{md.version} · {new Date(md.created_at).toLocaleString("zh-CN")} · {md.profile_version}
+                    生成于 {new Date(md.created_at).toLocaleString("zh-CN")}
                   </div>
                   {md.portrait_body[0] && (
                     <p className="text-sm text-ink-secondary leading-relaxed">{md.portrait_body[0]}</p>
                   )}
                   <div className="mt-4 text-xs text-ink-tertiary leading-relaxed">
-                    🔒 .md 不外露铁律:这份档案只你能看,任何其他用户都看不到原文。
-                    要改方向,以后通过<strong className="text-ink">「跟自己 Agent 对话」</strong>(Phase 4 之后)。
+                    .md 不外露:这份档案只你能看,任何其他用户都看不到原文。
+                    要改方向,可以通过<strong className="text-ink">「跟自己 Agent 对话」</strong>慢慢说。
                     现在可以重做问卷整体覆盖。
                   </div>
                   <div className="mt-4 flex gap-2">
@@ -232,7 +230,7 @@ export default function MePage() {
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 text-sm">
-                              <span className="font-medium">@{c.peer_nickname || `user_${c.peer_user_id}`}</span>
+                              <span className="font-medium">{c.peer_nickname ? `@${c.peer_nickname}` : "这位用户"}</span>
                               {c.related_verdict && (
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${verdictBadgeClass(c.related_verdict)}`}>
                                   {c.related_verdict}
@@ -415,6 +413,10 @@ function softBlockReasonLabel(reason?: string | null): string {
     reported: "你举报后自动加入软拉黑",
   }
   return map[reason || ""] || "你主动加入软拉黑"
+}
+
+function genderDisplay(gender?: string | null): string | null {
+  return gender ? GENDER_LABEL[gender] || null : null
 }
 
 // 我的资料卡 — 视图 / 编辑两态切换,不跳回问卷流程

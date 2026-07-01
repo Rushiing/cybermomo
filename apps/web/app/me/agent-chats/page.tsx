@@ -116,7 +116,7 @@ function MyAgentChatsPage() {
           <p className="text-sm text-ink-tertiary mt-1.5 leading-relaxed">
             我替你聊过的所有人都在这。点开看那场聊了什么 — 选择权在你。
             <br />
-            <span className="text-[12px]">🔒 对方 Agent 的内部信号(好感度变化等)按铁律不展示。</span>
+            <span className="text-[12px]">对方 Agent 的私下判断不会展示。</span>
           </p>
         </header>
 
@@ -195,8 +195,8 @@ function ChatRow({
     </span>
   ) : null
 
-  const displayName = c.peer_nickname || `user_${c.peer_user_id}`
-  const avatarChar = (c.peer_nickname || `U${c.peer_user_id}`).charAt(0)
+  const displayName = c.peer_nickname || "这位用户"
+  const avatarChar = (c.peer_nickname || "对").charAt(0)
 
   const Inner = (
     <div className="flex items-center justify-between gap-3">
@@ -206,7 +206,7 @@ function ChatRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm flex-wrap">
-            <span className="font-medium">@{displayName}</span>
+            <span className="font-medium">{c.peer_nickname ? `@${displayName}` : displayName}</span>
             {verdictBadge}
             {c.status === "running" && (
               <span className="text-[10px] text-primary-dark border border-primary-soft rounded-full px-1.5 py-0.5">聊着</span>

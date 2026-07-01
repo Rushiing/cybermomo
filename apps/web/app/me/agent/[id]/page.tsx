@@ -30,7 +30,7 @@ function getConversationAnchor(conv: AgentConversation): {
 } {
   const refs = conv.context_refs || {}
   const peerName: string | undefined = refs.peer_nickname
-    || (refs.peer_user_id ? `user_${refs.peer_user_id}` : undefined)
+    || (refs.peer_user_id ? "这位用户" : undefined)
 
   let state: string | undefined
   if (conv.scope === "room") {
@@ -156,6 +156,7 @@ export default function AgentConversationPage({
         </Link>
         {conv && (() => {
           const { peerName, state } = getConversationAnchor(conv)
+          const peerNickname = conv.context_refs?.peer_nickname
           const avatarChar = (peerName || "?").charAt(0)
           return (
             <div className="mt-3 flex items-start gap-3">
@@ -167,7 +168,7 @@ export default function AgentConversationPage({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="font-semibold text-[17px] truncate">
-                    {peerName ? `跟我聊 @${peerName}` : (conv.title || "跟你的 Agent")}
+                    {peerName ? `跟我聊 ${peerNickname ? `@${peerName}` : peerName}` : (conv.title || "跟你的 Agent")}
                   </h1>
                   {state && (
                     <span className={`text-[11px] rounded-full px-2 py-0.5 ${
@@ -184,7 +185,7 @@ export default function AgentConversationPage({
                   </span>
                 </div>
                 <p className="text-[12px] text-ink-tertiary mt-0.5">
-                  这场对话是关于 {peerName ? `@${peerName}` : "对方"} 的。
+                  这场对话是关于 {peerName ? (peerNickname ? `@${peerName}` : peerName) : "对方"} 的。
                 </p>
               </div>
               {/* 右上 CTA · scope=room 才有 · 跟标题在同一行,不再浮动 */}

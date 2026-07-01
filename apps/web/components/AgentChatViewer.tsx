@@ -4,7 +4,7 @@
  * Agent 互聊查看 modal · 给宿主看 Agent 们都聊了什么
  *
  * 铁律:对方 Agent 的 private_signals 永远不暴露(后端已过滤)
- *      只显示 utterance + intent + topic_ref(public_signals)
+ *      只显示 utterance + intent
  *      自己 Agent 的 private_signals 折叠在 details 里(可选展开)
  */
 import { useEffect, useState } from "react"
@@ -116,7 +116,7 @@ export default function AgentChatViewer({ summaryId, open, onClose }: Props) {
               <h2 className="font-semibold text-base">Agent 互聊回放</h2>
             </div>
             <p className="text-xs text-ink-tertiary mt-1">
-              你的 Agent 跟对方 Agent 的对话(对方 Agent 的内部信号不展示)
+              你的 Agent 跟对方 Agent 的对话,对方的私下判断不会展示。
             </p>
           </div>
           <button onClick={onClose} className="w-9 h-9 rounded-md hover:bg-bg-soft flex items-center justify-center text-ink-secondary">
@@ -142,15 +142,7 @@ export default function AgentChatViewer({ summaryId, open, onClose }: Props) {
           {data && (
             <>
               <div className="text-xs text-ink-tertiary mb-4 flex items-center gap-3 pb-3 border-b border-dashed border-line-soft">
-                <span>共 {data.turns} 轮</span>
-                <span>·</span>
-                <span>状态:{statusLabel(data.status)}</span>
-                {data.end_reason && (
-                  <>
-                    <span>·</span>
-                    <span>结束原因:{endReasonLabel(data.end_reason)}</span>
-                  </>
-                )}
+                <span>这场聊了 {data.turns} 轮</span>
               </div>
 
               {data.messages.length === 0 ? (
@@ -167,7 +159,7 @@ export default function AgentChatViewer({ summaryId, open, onClose }: Props) {
         {/* Footer hint */}
         <div className="px-6 py-3 border-t border-line-soft flex-shrink-0">
           <p className="text-xs text-ink-tertiary leading-relaxed">
-            🔒 这是只给你的回放 — 对方 Agent 的小心思(好感变化、聊得多深这些)按铁律不展示。
+            这份回放只给你看。对方 Agent 的私下判断不会展示。
           </p>
         </div>
       </div>
@@ -188,12 +180,6 @@ function MessageBubble({ m }: { m: AgentChatMessageView }) {
           <span>第 {m.turn} 轮</span>
           <span>·</span>
           <span>{intentLabel}</span>
-          {m.topic_ref && (
-            <>
-              <span>·</span>
-              <span className="bg-bg-soft px-1.5 py-px rounded text-[10px]">{m.topic_ref}</span>
-            </>
-          )}
         </div>
         <div className={`px-3.5 py-2.5 rounded-2xl text-[14px] leading-relaxed ${
           isHost
@@ -227,25 +213,4 @@ function MessageBubble({ m }: { m: AgentChatMessageView }) {
       </div>
     </div>
   )
-}
-
-function statusLabel(s: string): string {
-  return ({
-    running: "进行中",
-    done_natural: "自然结束",
-    done_terminated: "中断",
-    re_dispatched: "已再派",
-  } as Record<string, string>)[s] || s
-}
-
-function endReasonLabel(r: string): string {
-  return ({
-    natural_wrap: "自然收尾",
-    turn_limit: "聊够了",
-    boundary_hit_铁律: "触发底线",
-    no_hooks: "没有话题钩子",
-    missing_profile: ".md 不存在",
-    llm_error: "LLM 故障",
-    parse_error: "解析失败",
-  } as Record<string, string>)[r] || r
 }

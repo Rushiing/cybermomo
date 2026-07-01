@@ -235,10 +235,9 @@ export default function RoomPage() {
               真人聊天进行中
             </div>
             {activeSessions.map(s => {
-              const otherUid = s.user_a_id === myUid ? s.user_b_id : s.user_a_id
               const otherNick = s.user_a_id === myUid ? s.user_b_nickname : s.user_a_nickname
-              const displayName = otherNick || `user_${otherUid}`
-              const avatarChar = (otherNick || `U${otherUid}`).charAt(0)
+              const displayName = otherNick || "这位用户"
+              const avatarChar = (otherNick || "对").charAt(0)
               const sourceSum = s.source_summary_id != null ? summaryById[s.source_summary_id] : null
               return (
                 <Link
@@ -325,7 +324,7 @@ export default function RoomPage() {
                 <div className="flex items-start gap-3.5">
                   {(s.peer_nickname || s.peer_user_id) ? (
                     <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
-                      {(s.peer_nickname || `U${s.peer_user_id}`).charAt(0)}
+                      {(s.peer_nickname || "对").charAt(0)}
                     </div>
                   ) : (
                     <div className="w-11 h-11 rounded-full bg-bg-soft text-ink-tertiary text-sm flex items-center justify-center flex-shrink-0">
@@ -336,7 +335,7 @@ export default function RoomPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-[16px] font-semibold truncate">
                         {(s.peer_nickname || s.peer_user_id)
-                          ? `@${s.peer_nickname || `user_${s.peer_user_id}`}`
+                          ? (s.peer_nickname ? `@${s.peer_nickname}` : "这位用户")
                           : "（未知对方）"}
                       </h3>
                       <span className={`text-[13px] font-semibold tracking-tight px-2 py-0.5 rounded-md ${

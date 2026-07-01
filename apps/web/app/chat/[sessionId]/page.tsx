@@ -185,18 +185,18 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
             const otherNick = session && otherUid != null
               ? (session.user_a_id === myUid ? session.user_b_nickname : session.user_a_nickname)
               : null
-            const displayName = otherNick || (otherUid != null ? `user_${otherUid}` : "?")
-            const avatarChar = (otherNick || (otherUid != null ? `U${otherUid}` : "?")).charAt(0)
+            const displayName = otherNick || "对方"
+            const avatarChar = (otherNick || "对").charAt(0)
             return (
               <>
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#C7E8D5] to-primary text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
                   {avatarChar}
                 </div>
                 <div>
-                  <div className="font-semibold text-[15px]">@{displayName}</div>
+                  <div className="font-semibold text-[15px]">{otherNick ? `@${displayName}` : displayName}</div>
                   <div className="text-[11.5px] text-ink-secondary flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                    {sessionEnded ? `已结束(${session?.status})` : "在线"}
+                    {sessionEnded ? sessionStatusLabel(session?.status) : "在线"}
                   </div>
                 </div>
               </>
@@ -284,6 +284,15 @@ export default function ChatRoomPage({ params }: { params: { sessionId: string }
       )}
     </div>
   )
+}
+
+function sessionStatusLabel(status?: string | null): string {
+  return ({
+    ended: "已结束",
+    closed: "已结束",
+    blocked: "已拉黑",
+    reported: "已举报",
+  } as Record<string, string>)[status || ""] || "已结束"
 }
 
 function MenuItem(props: { children: React.ReactNode; onClick: () => void; warn?: boolean }) {
