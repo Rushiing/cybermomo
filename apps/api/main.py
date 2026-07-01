@@ -22,6 +22,7 @@ from src.auth.router import router as auth_router
 from src.human_chat.router import router as chat_router
 from src.match.router import router as match_router
 from src.md.router import router as md_router
+from src.plaza.router import router as plaza_router
 from src.room.router import router as room_router
 from src.shared.settings import get_settings
 from src.summary.router import router as summary_router
@@ -158,6 +159,7 @@ app.include_router(agent_chat_router, prefix="/api/agent_chat", tags=["agent_cha
 app.include_router(agent_self_router, prefix="/api/me/agent", tags=["agent_self"])
 app.include_router(room_router, prefix="/api/room", tags=["room"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
+app.include_router(plaza_router, prefix="/api/plaza", tags=["plaza"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 
 

@@ -354,6 +354,45 @@ export interface CalloutResponse {
   created_at: string
 }
 
+export interface PlazaNode {
+  user_id: number
+  nickname: string
+  age_band?: string | null
+  gender?: string | null
+  mbti?: string | null
+  domains: string[]
+  hooks: string[]
+  connection_label?: string | null
+  is_self: boolean
+  featured: boolean
+  state: "self" | "wander" | "shallow_probe" | "deep_chat" | "human_chat"
+  x: number
+  y: number
+}
+
+export interface PlazaLink {
+  source_user_id: number
+  target_user_id: number
+  kind: "shallow_probe" | "deep_chat" | "human_chat"
+}
+
+export interface PlazaFeedResponse {
+  nodes: PlazaNode[]
+  links: PlazaLink[]
+  refreshed_at: string
+}
+
+export interface PlazaInitiateRequest {
+  target_user_id: number
+}
+
+export interface PlazaInitiateResponse {
+  status: "queued" | "already_running" | "already_done"
+  match_id: number
+  summary_id?: number | null
+  message: string
+}
+
 export interface AgentChatMessageView {
   id: number
   speaker: "host" | "peer"
@@ -404,4 +443,3 @@ export interface CreateAgentConversationRequest {
   title?: string | null
   context_refs?: Record<string, any> | null
 }
-
