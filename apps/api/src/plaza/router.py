@@ -98,21 +98,21 @@ async def get_plaza_feed(
     if blocked:
         conditions.append(MdDocument.user_id.notin_(blocked))
 
-    rows = (await db.execute(
+    feed_user_ids = await _plaza_feed_user_ids(db, current_user.id, blocked)
+    if not feed_user_ids:
+        return PlazaFeedResponse(nodes=[], links=[], refreshed_at=datetime.now(timezone.utc))
+
+    row_results = (await db.execute(
         select(MdDocument, User, UserProfile)
         .join(User, User.id == MdDocument.user_id)
         .outerjoin(UserProfile, UserProfile.user_id == MdDocument.user_id)
-        .where(*conditions)
-        .order_by(
-            (MdDocument.user_id == current_user.id).desc(),
-            User.is_system_mock.desc(),
-            MdDocument.created_at.desc(),
-        )
-        .limit(24)
+        .where(*conditions, MdDocument.user_id.in_(feed_user_ids))
     )).all()
+    row_by_user = {md.user_id: (md, user, profile) for md, user, profile in row_results}
+    rows = [row_by_user[uid] for uid in feed_user_ids if uid in row_by_user]
 
     node_ids = [md.user_id for md, _, _ in rows]
-    link_kind_by_pair = await _plaza_links(db, node_ids)
+    link_kind_by_pair = await _plaza_links(db, node_ids, current_user.id)
 
     nodes: list[PlazaNode] = []
     for idx, (md, _, profile) in enumerate(rows):
@@ -148,6 +148,60 @@ async def get_plaza_feed(
         for (a, b), kind in link_kind_by_pair.items()
     ]
     return PlazaFeedResponse(nodes=nodes, links=links, refreshed_at=datetime.now(timezone.utc))
+
+
+async def _plaza_feed_user_ids(
+    db: AsyncSession,
+    current_user_id: int,
+    blocked: set[int],
+    limit: int = 30,
+) -> list[int]:
+    """
+    广场节点优先保证"你和谁有连接"能被看见。
+
+    第一版不能只取最新用户,否则当前用户的 match peer 很容易不在 24 个节点里,
+    前端看起来就像"你"永远是孤岛。
+    """
+    out: list[int] = []
+
+    def add(user_id: int) -> None:
+        if user_id in blocked or user_id in out or len(out) >= limit:
+            return
+        out.append(user_id)
+
+    add(current_user_id)
+
+    peer_pairs = (await db.execute(
+        select(Match.user_a_id, Match.user_b_id)
+        .where(or_(Match.user_a_id == current_user_id, Match.user_b_id == current_user_id))
+        .order_by(Match.updated_at.desc())
+        .limit(18)
+    )).all()
+    for a_id, b_id in peer_pairs:
+        add(b_id if a_id == current_user_id else a_id)
+
+    conditions = [
+        MdDocument.is_active.is_(True),
+        User.deleted_at.is_(None),
+    ]
+    if blocked:
+        conditions.append(MdDocument.user_id.notin_(blocked))
+
+    recent_ids = (await db.execute(
+        select(MdDocument.user_id)
+        .join(User, User.id == MdDocument.user_id)
+        .where(*conditions)
+        .order_by(
+            (MdDocument.user_id == current_user_id).desc(),
+            User.is_system_mock.desc(),
+            MdDocument.created_at.desc(),
+        )
+        .limit(limit * 2)
+    )).scalars().all()
+    for user_id in recent_ids:
+        add(user_id)
+
+    return out
 
 
 @router.post("/initiate", response_model=PlazaInitiateResponse)
@@ -378,6 +432,7 @@ async def _soft_blocked_ids(db: AsyncSession, user_id: int) -> set[int]:
 async def _plaza_links(
     db: AsyncSession,
     node_ids: list[int],
+    focus_user_id: int,
 ) -> dict[tuple[int, int], Literal["shallow_probe", "deep_chat", "human_chat"]]:
     if len(node_ids) < 2:
         return {}
@@ -386,7 +441,12 @@ async def _plaza_links(
         select(Match).where(
             Match.user_a_id.in_(node_ids),
             Match.user_b_id.in_(node_ids),
-        ).limit(32)
+        )
+        .order_by(
+            or_(Match.user_a_id == focus_user_id, Match.user_b_id == focus_user_id).desc(),
+            Match.updated_at.desc(),
+        )
+        .limit(48)
     )).scalars().all()
     if not matches:
         return {}

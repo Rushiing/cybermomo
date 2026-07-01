@@ -85,6 +85,9 @@ export default function PlazaPage() {
     feed?.nodes.forEach(n => { out[n.user_id] = n })
     return out
   }, [feed])
+  const visibleLinkKinds = useMemo(() => {
+    return new Set(feed?.links.map(link => link.kind) || [])
+  }, [feed])
   const selfUserId = useMemo(
     () => feed?.nodes.find(n => n.is_self)?.user_id || null,
     [feed],
@@ -102,7 +105,7 @@ export default function PlazaPage() {
       <Topbar active="plaza" />
       <Toast message={notice} onClose={() => setNotice(null)} />
 
-      <main className="max-w-[1040px] mx-auto px-5 py-6 pb-24">
+      <main className="w-full max-w-[1680px] mx-auto px-5 lg:px-8 py-6 pb-24">
         <header className="mb-5 flex items-end justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">广场</h1>
@@ -137,7 +140,7 @@ export default function PlazaPage() {
           </div>
         )}
 
-        <section className="relative h-[680px] min-h-[calc(100vh-180px)] bg-bg-elevated border border-line-soft rounded-lg overflow-hidden shadow-card">
+        <section className="relative h-[clamp(680px,76vh,960px)] bg-bg-elevated border border-line-soft rounded-lg overflow-hidden shadow-card">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,174,66,0.08),transparent_34%),linear-gradient(rgba(31,41,55,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(31,41,55,0.035)_1px,transparent_1px)] bg-[length:100%_100%,56px_56px,56px_56px]" />
 
           {loading && !feed && (
@@ -167,7 +170,7 @@ export default function PlazaPage() {
                       x2={b.x}
                       y2={b.y}
                       className={linkClass(link.kind)}
-                      strokeDasharray={link.kind === "shallow_probe" ? "1.8 1.8" : undefined}
+                      strokeDasharray={link.kind === "shallow_probe" ? "0.8 2.1" : undefined}
                       vectorEffect="non-scaling-stroke"
                     />
                   )
@@ -176,9 +179,15 @@ export default function PlazaPage() {
 
               <div className="absolute left-4 top-4 flex flex-wrap gap-2 text-[11px] text-ink-tertiary">
                 <LegendDot label="游荡" />
-                <LegendLine label="浅层试探" className="border-dashed" />
-                <LegendLine label="Agent 互聊" className="border-solid border-primary" />
-                <LegendLine label="真人聊天" className="border-double border-primary" />
+                {visibleLinkKinds.has("shallow_probe") && (
+                  <LegendLine label="浅层试探" kind="shallow_probe" />
+                )}
+                {visibleLinkKinds.has("deep_chat") && (
+                  <LegendLine label="Agent 互聊" kind="deep_chat" />
+                )}
+                {visibleLinkKinds.has("human_chat") && (
+                  <LegendLine label="真人聊天" kind="human_chat" />
+                )}
               </div>
 
               {feed.nodes.map(node => (
@@ -426,19 +435,29 @@ function LegendDot({ label }: { label: string }) {
   )
 }
 
-function LegendLine({ label, className }: { label: string; className: string }) {
+function LegendLine({ label, kind }: { label: string; kind: PlazaLink["kind"] }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-bg/80 border border-line-soft px-2 py-1">
-      <span className={`w-5 border-t ${className}`} />
+      <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden="true">
+        <line
+          x1="1"
+          y1="3"
+          x2="21"
+          y2="3"
+          className={linkClass(kind)}
+          strokeDasharray={kind === "shallow_probe" ? "2 3" : undefined}
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
       {label}
     </span>
   )
 }
 
 function linkClass(kind: PlazaLink["kind"]): string {
-  if (kind === "human_chat") return "stroke-primary stroke-[0.55] opacity-80"
-  if (kind === "deep_chat") return "stroke-primary stroke-[0.42] opacity-60"
-  return "stroke-ink stroke-[0.24] opacity-25"
+  if (kind === "human_chat") return "stroke-[#047857] stroke-[0.9] opacity-90"
+  if (kind === "deep_chat") return "stroke-primary stroke-[0.38] opacity-52"
+  return "stroke-ink-tertiary stroke-[0.22] opacity-35"
 }
 
 function genderLabel(g?: string | null): string | null {
