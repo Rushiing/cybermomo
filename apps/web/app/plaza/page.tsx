@@ -22,14 +22,6 @@ import {
   type PlazaNode,
 } from "@/lib/api"
 
-const STATE_LABEL: Record<PlazaNode["state"], string> = {
-  self: "你在这里",
-  wander: "游荡中",
-  shallow_probe: "浅层试探中",
-  deep_chat: "Agent 正在聊",
-  human_chat: "真人聊天中",
-}
-
 const LINK_LABEL: Record<PlazaLink["kind"], string> = {
   shallow_probe: "浅层试探",
   deep_chat: "Agent 互聊",
@@ -92,6 +84,17 @@ export default function PlazaPage() {
     feed?.nodes.forEach(n => { out[n.user_id] = n })
     return out
   }, [feed])
+  const selfUserId = useMemo(
+    () => feed?.nodes.find(n => n.is_self)?.user_id || null,
+    [feed],
+  )
+  const selectedSelfLinkKind = useMemo(() => {
+    if (!feed || !selected || !selfUserId) return null
+    return feed.links.find(link =>
+      (link.source_user_id === selfUserId && link.target_user_id === selected.user_id)
+      || (link.target_user_id === selfUserId && link.source_user_id === selected.user_id)
+    )?.kind || null
+  }, [feed, selected, selfUserId])
 
   return (
     <div className="min-h-screen">
@@ -200,6 +203,7 @@ export default function PlazaPage() {
           linkCount={feed?.links.filter(l =>
             l.source_user_id === selected.user_id || l.target_user_id === selected.user_id
           ).length || 0}
+          selfLinkKind={selectedSelfLinkKind}
           initiating={initiatingId === selected.user_id}
           onClose={() => setSelected(null)}
           onInitiate={() => void initiate(selected)}
@@ -257,17 +261,19 @@ function PlazaPoint({
 function ProfileDrawer({
   node,
   linkCount,
+  selfLinkKind,
   initiating,
   onClose,
   onInitiate,
 }: {
   node: PlazaNode
   linkCount: number
+  selfLinkKind: PlazaLink["kind"] | null
   initiating: boolean
   onClose: () => void
   onInitiate: () => void
 }) {
-  const cta = getPlazaCta(node, initiating)
+  const cta = getPlazaCta(node, initiating, selfLinkKind)
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center px-4 pb-4 sm:items-center">
       <div className="absolute inset-0 bg-ink/25 backdrop-blur-sm" onClick={onClose} />
@@ -320,7 +326,7 @@ function ProfileDrawer({
           </div>
 
           <div className="flex items-center justify-between text-xs text-ink-tertiary border-t border-line-soft pt-3">
-            <span>{STATE_LABEL[node.state]}</span>
+            <span>{getPlazaStatusLabel(node, selfLinkKind)}</span>
             <span>{linkCount > 0 ? `广场里有 ${linkCount} 条连接` : "暂时独自游荡"}</span>
           </div>
         </div>
@@ -349,19 +355,37 @@ function ProfileDrawer({
   )
 }
 
-function getPlazaCta(node: PlazaNode, initiating: boolean): {
+function getPlazaCta(
+  node: PlazaNode,
+  initiating: boolean,
+  selfLinkKind: PlazaLink["kind"] | null,
+): {
   label: string
   disabled: boolean
 } {
   if (node.is_self) return { label: "这是你自己", disabled: true }
   if (initiating) return { label: "派出中…", disabled: true }
-  if (node.state === "deep_chat") {
-    return { label: "看看 Agent 聊完没", disabled: false }
+  if (selfLinkKind === "deep_chat") {
+    return { label: "查看这场试探进展", disabled: false }
   }
-  if (node.state === "human_chat") {
+  if (selfLinkKind === "human_chat") {
     return { label: "你们已经可以真人聊天", disabled: true }
   }
   return { label: "让我的 Agent 去跟 TA 聊", disabled: false }
+}
+
+function getPlazaStatusLabel(
+  node: PlazaNode,
+  selfLinkKind: PlazaLink["kind"] | null,
+): string {
+  if (node.is_self) return "你在这里"
+  if (selfLinkKind === "human_chat") return "你们已经开了真人聊天"
+  if (selfLinkKind === "deep_chat") return "你的 Agent 已经试探过 TA"
+  if (selfLinkKind === "shallow_probe") return "你已经试探过 TA"
+  if (node.state === "human_chat") return "TA 有一场真人聊天"
+  if (node.state === "deep_chat") return "TA 有一场 Agent 互聊"
+  if (node.state === "shallow_probe") return "TA 被试探过"
+  return "游荡中"
 }
 
 function LegendDot({ label }: { label: string }) {
