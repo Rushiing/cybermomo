@@ -48,6 +48,7 @@ class RoomStatusFullResponse(RoomStatusResponse):
 class SoftBlockEntry(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     blocked_user_id: int
+    blocked_nickname: Optional[str] = None
     reason: Optional[str] = None
     created_at: datetime
 
@@ -198,9 +199,23 @@ async def list_my_blocklist(
     db: AsyncSession = Depends(get_session),
 ):
     rows = (await db.execute(
-        select(UserSoftBlocklist).where(UserSoftBlocklist.user_id == current_user.id)
-    )).scalars().all()
-    return rows
+        select(UserSoftBlocklist, UserProfile.nickname)
+        .outerjoin(
+            UserProfile,
+            UserProfile.user_id == UserSoftBlocklist.blocked_user_id,
+        )
+        .where(UserSoftBlocklist.user_id == current_user.id)
+        .order_by(UserSoftBlocklist.created_at.desc())
+    )).all()
+    return [
+        SoftBlockEntry(
+            blocked_user_id=block.blocked_user_id,
+            blocked_nickname=nickname,
+            reason=block.reason,
+            created_at=block.created_at,
+        )
+        for block, nickname in rows
+    ]
 
 
 @router.delete("/blocklist/{blocked_user_id}", status_code=status.HTTP_204_NO_CONTENT)

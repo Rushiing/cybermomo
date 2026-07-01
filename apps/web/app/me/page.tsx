@@ -44,6 +44,7 @@ const GENDER_LABEL: Record<string, string> = {
 
 interface SoftBlockEntry {
   blocked_user_id: number
+  blocked_nickname?: string | null
   reason?: string | null
   created_at: string
 }
@@ -101,9 +102,10 @@ export default function MePage() {
     }
     // 点第二次:真执行
     setArmedUnblockUid(null)
+    const target = blocklist.find(b => b.blocked_user_id === uid)
     try {
       await api.del(`/api/room/blocklist/${uid}`)
-      setNotice(`已解除对 user_${uid} 的软拉黑。`)
+      setNotice(`已解除对 ${softBlockName(target)} 的软拉黑。`)
       await load()
     } catch (e: any) {
       setNotice(`解除失败:${e?.detail || e?.message}`)
@@ -275,9 +277,9 @@ export default function MePage() {
                     {blocklist.map(b => (
                       <div key={b.blocked_user_id} className="flex items-center justify-between gap-3 py-2 border-b border-line-soft last:border-b-0">
                         <div>
-                          <div className="text-sm font-medium">user_{b.blocked_user_id}</div>
+                          <div className="text-sm font-medium">{softBlockName(b)}</div>
                           <div className="text-xs text-ink-tertiary">
-                            {b.reason || "未填原因"} · {new Date(b.created_at).toLocaleString("zh-CN")}
+                            {softBlockReasonLabel(b.reason)} · {new Date(b.created_at).toLocaleString("zh-CN")}
                           </div>
                         </div>
                         <button
@@ -399,6 +401,20 @@ function decisionLabelMe(d: string): string {
     chat_with_my_agent: "调方向",
   }
   return map[d] || d
+}
+
+function softBlockName(entry?: SoftBlockEntry | null): string {
+  const nickname = entry?.blocked_nickname?.trim()
+  return nickname ? `@${nickname}` : "这位用户"
+}
+
+function softBlockReasonLabel(reason?: string | null): string {
+  const map: Record<string, string> = {
+    "dropped from summary card": "你在简报卡里点了「丢」",
+    "blocked from chat session": "你在真人聊天里拉黑了 TA",
+    reported: "你举报后自动加入软拉黑",
+  }
+  return map[reason || ""] || "你主动加入软拉黑"
 }
 
 // 我的资料卡 — 视图 / 编辑两态切换,不跳回问卷流程
