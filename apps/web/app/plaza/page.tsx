@@ -71,6 +71,7 @@ export default function PlazaPage() {
         href: resp.summary_id ? `/room?focus=${resp.summary_id}` : "/room",
         label: resp.status === "already_done" ? "查看这份简报" : "去个人房间等简报",
       })
+      setSelected(null)
       await load()
     } catch (e: any) {
       setNotice(e?.detail || e?.message || "这次没派出去,稍后再试。")
