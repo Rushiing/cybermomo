@@ -35,15 +35,31 @@ type FieldCloudView = {
   width: number
   tone: "mint" | "sky" | "gold" | "slate"
   weight: number
+  active: boolean
+}
+
+type FieldPullView = {
+  user_id: number
+  label: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  active: boolean
+  strength: number
 }
 
 const FIELD_ANCHORS = [
-  { x: 23, y: 30, tone: "mint" as const },
-  { x: 52, y: 24, tone: "sky" as const },
-  { x: 77, y: 39, tone: "gold" as const },
-  { x: 31, y: 68, tone: "slate" as const },
-  { x: 65, y: 71, tone: "mint" as const },
+  { x: 18, y: 25, tone: "mint" as const },
+  { x: 45, y: 21, tone: "sky" as const },
+  { x: 73, y: 29, tone: "gold" as const },
+  { x: 84, y: 55, tone: "slate" as const },
+  { x: 63, y: 77, tone: "mint" as const },
+  { x: 36, y: 76, tone: "sky" as const },
+  { x: 17, y: 55, tone: "gold" as const },
 ]
+
+const DOMAIN_WEIGHTS = [1, 0.72, 0.5, 0.34]
 
 export default function PlazaPage() {
   const [feed, setFeed] = useState<PlazaFeedResponse | null>(null)
@@ -129,8 +145,18 @@ export default function PlazaPage() {
     return out
   }, [plazaFeed, activeUserId])
   const fieldClouds = useMemo(
-    () => makeFieldClouds(plazaFeed?.nodes || []),
-    [plazaFeed],
+    () => makeFieldClouds(plazaFeed?.nodes || [], activeUserId ? nodeById[activeUserId] || null : null),
+    [activeUserId, nodeById, plazaFeed],
+  )
+  const fieldPulls = useMemo(
+    () => makeFieldPulls(
+      plazaFeed?.nodes || [],
+      fieldClouds,
+      activeUserId,
+      activeRelatedIds,
+      selfUserId,
+    ),
+    [activeRelatedIds, activeUserId, fieldClouds, plazaFeed, selfUserId],
   )
 
   return (
@@ -201,6 +227,15 @@ export default function PlazaPage() {
               </div>
 
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                {fieldPulls.map(pull => (
+                  <path
+                    key={`${pull.user_id}-${pull.label}`}
+                    d={fieldPullPath(pull)}
+                    className={`fill-none stroke-primary ${pull.active ? "stroke-[0.34] opacity-[0.34]" : "stroke-[0.22] opacity-[0.10]"}`}
+                    strokeDasharray={pull.active ? "0.9 1.5" : "0.6 2.4"}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
                 {plazaFeed.links.map((link, idx) => {
                   const a = nodeById[link.source_user_id]
                   const b = nodeById[link.target_user_id]
@@ -549,12 +584,14 @@ function FieldCloud({ cloud }: { cloud: FieldCloudView }) {
   }
   return (
     <div
-      className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border backdrop-blur-[2px] px-5 py-2.5 text-[11px] shadow-[0_18px_60px_rgba(31,41,55,0.055)] ${toneClass[cloud.tone]}`}
+      className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border backdrop-blur-[2px] px-5 py-2.5 text-[11px] shadow-[0_18px_60px_rgba(31,41,55,0.055)] transition duration-300 ${
+        cloud.active ? "scale-[1.04] border-primary/30 bg-white/78 text-primary-dark shadow-[0_22px_70px_rgba(0,174,66,0.12)]" : toneClass[cloud.tone]
+      }`}
       style={{
         left: `${cloud.x}%`,
         top: `${cloud.y}%`,
         minWidth: cloud.width,
-        opacity: 0.55 + cloud.weight * 0.12,
+        opacity: cloud.active ? 0.92 : 0.52 + cloud.weight * 0.13,
       }}
     >
       {cloud.label}
@@ -562,9 +599,10 @@ function FieldCloud({ cloud }: { cloud: FieldCloudView }) {
   )
 }
 
-function makeFieldClouds(nodes: PlazaNode[]): FieldCloudView[] {
+function makeFieldClouds(nodes: PlazaNode[], activeNode: PlazaNode | null): FieldCloudView[] {
   const domains = topDomains(nodes)
-  return domains.map(({ label, count }, idx) => {
+  const activeDomains = new Set(activeNode?.domains.slice(0, DOMAIN_WEIGHTS.length) || [])
+  return domains.map(({ label, score, count }, idx) => {
     const anchor = FIELD_ANCHORS[idx % FIELD_ANCHORS.length]
     return {
       label,
@@ -572,7 +610,8 @@ function makeFieldClouds(nodes: PlazaNode[]): FieldCloudView[] {
       y: anchor.y,
       width: 90 + Math.min(90, count * 18),
       tone: anchor.tone,
-      weight: Math.min(1, count / 4),
+      weight: Math.min(1, score / 4),
+      active: activeDomains.has(label),
     }
   })
 }
@@ -622,17 +661,21 @@ function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | nu
   }
 }
 
-function topDomains(nodes: PlazaNode[]): Array<{ label: string; count: number }> {
-  const counts = new Map<string, number>()
+function topDomains(nodes: PlazaNode[]): Array<{ label: string; count: number; score: number }> {
+  const counts = new Map<string, { count: number; score: number }>()
   nodes.forEach(node => {
-    node.domains.slice(0, 3).forEach(domain => {
-      counts.set(domain, (counts.get(domain) || 0) + 1)
+    node.domains.slice(0, DOMAIN_WEIGHTS.length).forEach((domain, idx) => {
+      const current = counts.get(domain) || { count: 0, score: 0 }
+      counts.set(domain, {
+        count: current.count + 1,
+        score: current.score + (DOMAIN_WEIGHTS[idx] || 0.2),
+      })
     })
   })
   return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
+    .sort((a, b) => b[1].score - a[1].score || a[0].localeCompare(b[0], "zh-CN"))
     .slice(0, FIELD_ANCHORS.length)
-    .map(([label, count]) => ({ label, count }))
+    .map(([label, value]) => ({ label, count: value.count, score: value.score }))
 }
 
 function domainAnchorMap(nodes: PlazaNode[]): Map<string, { x: number; y: number }> {
@@ -650,20 +693,62 @@ function nodeFieldPosition(
   idx: number,
 ): { x: number; y: number } {
   const anchors = node.domains
-    .slice(0, 2)
-    .map(domain => domainAnchors.get(domain))
-    .filter(Boolean) as Array<{ x: number; y: number }>
+    .slice(0, DOMAIN_WEIGHTS.length)
+    .map((domain, domainIdx) => {
+      const anchor = domainAnchors.get(domain)
+      if (!anchor) return null
+      return { ...anchor, weight: DOMAIN_WEIGHTS[domainIdx] || 0.2 }
+    })
+    .filter(Boolean) as Array<{ x: number; y: number; weight: number }>
   const fallbackAnchor = FIELD_ANCHORS[(stableNumber(`${node.user_id}:field`) + idx) % FIELD_ANCHORS.length]
+  const weightSum = anchors.reduce((sum, a) => sum + a.weight, 0)
   const base = anchors.length
     ? {
-      x: anchors.reduce((sum, a) => sum + a.x, 0) / anchors.length,
-      y: anchors.reduce((sum, a) => sum + a.y, 0) / anchors.length,
+      x: anchors.reduce((sum, a) => sum + a.x * a.weight, 0) / weightSum,
+      y: anchors.reduce((sum, a) => sum + a.y * a.weight, 0) / weightSum,
     }
     : fallbackAnchor
+  const angle = stableUnit(`${node.user_id}:field-angle`) * Math.PI * 2
+  const range = 6 + Math.min(9, node.domains.length * 1.8)
   return {
-    x: base.x + jitter(node.user_id, "x", 19),
-    y: base.y + jitter(node.user_id, "y", 16),
+    x: base.x + Math.cos(angle) * range + jitter(node.user_id, "x", 5.5),
+    y: base.y + Math.sin(angle) * range * 0.78 + jitter(node.user_id, "y", 4.5),
   }
+}
+
+function makeFieldPulls(
+  nodes: PlazaNode[],
+  clouds: FieldCloudView[],
+  activeUserId: number | null,
+  activeRelatedIds: Set<number>,
+  selfUserId: number | null,
+): FieldPullView[] {
+  const cloudByDomain = new Map(clouds.map(cloud => [cloud.label, cloud]))
+  const pulls: FieldPullView[] = []
+  nodes.forEach(node => {
+    const isActive = activeUserId === node.user_id
+    const isRelated = !!activeUserId && activeRelatedIds.has(node.user_id)
+    const shouldShow = activeUserId
+      ? isActive || isRelated
+      : node.is_self || (node.featured && stableNumber(`${node.user_id}:field-pull`) % 4 === 0)
+    if (!shouldShow) return
+
+    node.domains.slice(0, isActive ? DOMAIN_WEIGHTS.length : 2).forEach((domain, idx) => {
+      const cloud = cloudByDomain.get(domain)
+      if (!cloud) return
+      pulls.push({
+        user_id: node.user_id,
+        label: domain,
+        x1: node.x,
+        y1: node.y,
+        x2: cloud.x,
+        y2: cloud.y,
+        active: isActive,
+        strength: DOMAIN_WEIGHTS[idx] || 0.2,
+      })
+    })
+  })
+  return pulls.slice(0, activeUserId ? 22 : 10)
 }
 
 function nearFieldPosition(index: number, total: number, userId: number): { x: number; y: number } {
@@ -773,6 +858,20 @@ function linkPath(a: PlazaNode, b: PlazaNode): string {
   const c2x = a.x + dx * 0.68 + nx
   const c2y = a.y + dy * 0.68 + ny
   return `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`
+}
+
+function fieldPullPath(pull: FieldPullView): string {
+  const dx = pull.x2 - pull.x1
+  const dy = pull.y2 - pull.y1
+  const distance = Math.sqrt(dx * dx + dy * dy) || 0.01
+  const curve = (5 + pull.strength * 5) * (pull.user_id % 2 === 0 ? 1 : -1)
+  const nx = (-dy / distance) * curve
+  const ny = (dx / distance) * curve
+  const c1x = pull.x1 + dx * 0.42 + nx
+  const c1y = pull.y1 + dy * 0.42 + ny
+  const c2x = pull.x1 + dx * 0.72 + nx * 0.4
+  const c2y = pull.y1 + dy * 0.72 + ny * 0.4
+  return `M ${pull.x1} ${pull.y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${pull.x2} ${pull.y2}`
 }
 
 function linkClass(
