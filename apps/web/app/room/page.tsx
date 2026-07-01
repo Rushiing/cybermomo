@@ -43,6 +43,7 @@ export default function RoomPage() {
   const [actionPending, setActionPending] = useState<number | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [viewerSummaryId, setViewerSummaryId] = useState<number | null>(null)
+  const [focusedSummaryId, setFocusedSummaryId] = useState<number | null>(null)
 
   const myUid = Number(getMockUserId())
 
@@ -70,6 +71,14 @@ export default function RoomPage() {
     const t = setTimeout(() => setNotice(null), 5000)
     return () => clearTimeout(t)
   }, [notice])
+  useEffect(() => {
+    if (loading || summaries.length === 0 || typeof window === "undefined") return
+    const focus = Number(new URLSearchParams(window.location.search).get("focus"))
+    if (!focus || focusedSummaryId === focus) return
+    if (!summaries.some(s => s.id === focus)) return
+    setFocusedSummaryId(focus)
+    jumpToBriefing(focus)
+  }, [loading, summaries, focusedSummaryId])
 
   async function loadAll(opts?: { silent?: boolean }) {
     // silent:轮询 / 决策后的补刷不弹整页"加载中",只首屏 load 显 spinner

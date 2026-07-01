@@ -41,6 +41,11 @@ export default function PlazaPage() {
   const [selected, setSelected] = useState<PlazaNode | null>(null)
   const [loading, setLoading] = useState(true)
   const [initiatingId, setInitiatingId] = useState<number | null>(null)
+  const [handoff, setHandoff] = useState<{
+    message: string
+    href: string
+    label: string
+  } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -69,6 +74,11 @@ export default function PlazaPage() {
         { target_user_id: target.user_id },
       )
       setNotice(resp.message)
+      setHandoff({
+        message: resp.message,
+        href: resp.summary_id ? `/room?focus=${resp.summary_id}` : "/room",
+        label: resp.status === "already_done" ? "查看这份简报" : "去个人房间等简报",
+      })
       await load()
     } catch (e: any) {
       setNotice(e?.detail || e?.message || "这次没派出去,稍后再试。")
@@ -108,6 +118,18 @@ export default function PlazaPage() {
         {error && (
           <div className="bg-warn-soft text-warn rounded-md px-4 py-3 text-sm mb-4">
             {error}
+          </div>
+        )}
+
+        {handoff && (
+          <div className="mb-4 bg-primary-soft border border-primary/35 rounded-md px-4 py-3 flex items-center justify-between gap-3">
+            <p className="text-sm text-primary-dark leading-relaxed">{handoff.message}</p>
+            <Link
+              href={handoff.href}
+              className="text-xs font-medium text-primary-dark border border-primary/45 rounded-md px-3 py-1.5 hover:bg-bg transition whitespace-nowrap"
+            >
+              {handoff.label} →
+            </Link>
           </div>
         )}
 
@@ -245,6 +267,7 @@ function ProfileDrawer({
   onClose: () => void
   onInitiate: () => void
 }) {
+  const cta = getPlazaCta(node, initiating)
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center px-4 pb-4 sm:items-center">
       <div className="absolute inset-0 bg-ink/25 backdrop-blur-sm" onClick={onClose} />
@@ -305,10 +328,10 @@ function ProfileDrawer({
         <footer className="mt-5">
           <button
             onClick={onInitiate}
-            disabled={node.is_self || initiating}
+            disabled={cta.disabled}
             className="w-full rounded-md bg-primary text-white py-3 text-sm font-medium hover:bg-primary-dark disabled:bg-line disabled:text-ink-tertiary disabled:cursor-not-allowed transition"
           >
-            {node.is_self ? "这是你自己" : initiating ? "派出中…" : "让我的 Agent 去跟 TA 聊"}
+            {cta.label}
           </button>
           {!node.is_self && (
             <p className="text-[11px] text-ink-tertiary leading-relaxed mt-2.5 text-center">
@@ -324,6 +347,21 @@ function ProfileDrawer({
       </aside>
     </div>
   )
+}
+
+function getPlazaCta(node: PlazaNode, initiating: boolean): {
+  label: string
+  disabled: boolean
+} {
+  if (node.is_self) return { label: "这是你自己", disabled: true }
+  if (initiating) return { label: "派出中…", disabled: true }
+  if (node.state === "deep_chat") {
+    return { label: "看看 Agent 聊完没", disabled: false }
+  }
+  if (node.state === "human_chat") {
+    return { label: "你们已经可以真人聊天", disabled: true }
+  }
+  return { label: "让我的 Agent 去跟 TA 聊", disabled: false }
 }
 
 function LegendDot({ label }: { label: string }) {
