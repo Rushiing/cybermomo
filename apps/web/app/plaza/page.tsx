@@ -140,8 +140,11 @@ export default function PlazaPage() {
           </div>
         )}
 
-        <section className="relative h-[clamp(680px,76vh,960px)] bg-bg-elevated border border-line-soft rounded-lg overflow-hidden shadow-card">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,174,66,0.08),transparent_34%),linear-gradient(rgba(31,41,55,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(31,41,55,0.035)_1px,transparent_1px)] bg-[length:100%_100%,56px_56px,56px_56px]" />
+        <section className="relative h-[clamp(680px,76vh,960px)] bg-[#fbfaf7] border border-line-soft rounded-lg overflow-hidden shadow-card">
+          <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(0,174,66,0.055),transparent_31%,rgba(31,41,55,0.035)_58%,transparent_82%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(247,250,247,0.72)_48%,rgba(255,255,255,0.98))]" />
+          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-white/90 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-white/95 to-transparent" />
+          <div className="absolute inset-0 shadow-[inset_0_30px_90px_rgba(31,41,55,0.035),inset_0_-28px_80px_rgba(0,174,66,0.055)]" />
 
           {loading && !feed && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-secondary">
@@ -162,14 +165,15 @@ export default function PlazaPage() {
                   const a = nodeById[link.source_user_id]
                   const b = nodeById[link.target_user_id]
                   if (!a || !b) return null
+                  const linkedToSelf = selfUserId === link.source_user_id || selfUserId === link.target_user_id
+                  const linkedToSelected = !!selected && (
+                    selected.user_id === link.source_user_id || selected.user_id === link.target_user_id
+                  )
                   return (
-                    <line
+                    <path
                       key={`${link.source_user_id}-${link.target_user_id}`}
-                      x1={a.x}
-                      y1={a.y}
-                      x2={b.x}
-                      y2={b.y}
-                      className={linkClass(link.kind)}
+                      d={linkPath(a, b)}
+                      className={linkClass(link.kind, linkedToSelf, linkedToSelected)}
                       strokeDasharray={link.kind === "shallow_probe" ? "0.8 2.1" : undefined}
                       vectorEffect="non-scaling-stroke"
                     />
@@ -233,30 +237,46 @@ function PlazaPoint({
   onSelect: () => void
 }) {
   const hook = node.hooks[0]
-  const showLabel = node.featured || selected
+  const showLabel = node.is_self || selected || node.featured
+  const depth = nodeDepth(node)
+  const pointSize = node.is_self ? 18 : selected ? 15 : Math.round(8 + depth * 5)
+  const haloSize = node.is_self ? 12 : selected ? 9 : 5
   return (
     <button
       onClick={onSelect}
-      className="absolute -translate-x-1/2 -translate-y-1/2 group text-left"
-      style={{ left: `${node.x}%`, top: `${node.y}%` }}
+      className="absolute -translate-x-1/2 -translate-y-1/2 group text-left outline-none"
+      style={{
+        left: `${node.x}%`,
+        top: `${node.y}%`,
+        zIndex: Math.round(10 + node.y),
+      }}
       title={node.nickname}
     >
       {hook && (
-        <span className={`absolute left-5 -top-8 whitespace-nowrap rounded-md border border-line-soft bg-bg-elevated px-2.5 py-1.5 text-[11px] text-ink-secondary shadow-card transition ${
+        <span className={`absolute left-5 -top-8 whitespace-nowrap rounded-full border border-white/80 bg-white/[0.88] backdrop-blur px-3 py-1.5 text-[11px] text-ink-secondary shadow-[0_8px_24px_rgba(31,41,55,0.08)] transition ${
           showLabel ? "opacity-100" : "opacity-0 group-hover:opacity-100"
         }`}>
           {hook}
         </span>
       )}
-      <span className={`relative flex items-center justify-center rounded-full transition ${
-        node.is_self
-          ? "w-5 h-5 bg-primary shadow-[0_0_0_7px_rgba(0,174,66,0.14)]"
-          : selected
-            ? "w-4 h-4 bg-primary-dark shadow-[0_0_0_6px_rgba(0,174,66,0.12)]"
-            : "w-3 h-3 bg-primary/80 group-hover:bg-primary"
-      }`}>
+      <span
+        className={`relative flex items-center justify-center rounded-full transition duration-200 ${
+          node.is_self
+            ? "bg-primary shadow-[0_14px_32px_rgba(0,174,66,0.28)]"
+            : selected
+              ? "bg-primary-dark shadow-[0_10px_28px_rgba(0,174,66,0.22)]"
+              : "bg-primary/75 shadow-[0_8px_22px_rgba(0,174,66,0.12)] group-hover:bg-primary"
+        }`}
+        style={{
+          width: pointSize,
+          height: pointSize,
+          boxShadow: node.is_self
+            ? `0 0 0 ${haloSize}px rgba(0,174,66,0.12),0 18px 38px rgba(0,174,66,0.28)`
+            : `0 0 0 ${haloSize}px rgba(0,174,66,${selected ? 0.12 : 0.055}),0 10px 24px rgba(31,41,55,0.10)`,
+        }}
+      >
         {(node.state === "deep_chat" || node.state === "human_chat") && (
-          <span className="absolute inset-[-5px] rounded-full border border-primary/40 animate-agent-pulse" />
+          <span className="absolute inset-[-7px] rounded-full border border-primary/30 animate-agent-pulse" />
         )}
       </span>
       <span className={`absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap text-[11px] text-ink-secondary transition ${
@@ -444,7 +464,7 @@ function LegendLine({ label, kind }: { label: string; kind: PlazaLink["kind"] })
           y1="3"
           x2="21"
           y2="3"
-          className={linkClass(kind)}
+          className={linkClass(kind, false, true)}
           strokeDasharray={kind === "shallow_probe" ? "2 3" : undefined}
           vectorEffect="non-scaling-stroke"
         />
@@ -454,10 +474,43 @@ function LegendLine({ label, kind }: { label: string; kind: PlazaLink["kind"] })
   )
 }
 
-function linkClass(kind: PlazaLink["kind"]): string {
-  if (kind === "human_chat") return "stroke-[#047857] stroke-[0.9] opacity-90"
-  if (kind === "deep_chat") return "stroke-primary stroke-[0.38] opacity-52"
-  return "stroke-ink-tertiary stroke-[0.22] opacity-35"
+function linkPath(a: PlazaNode, b: PlazaNode): string {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const distance = Math.sqrt(dx * dx + dy * dy)
+  const bend = Math.min(14, Math.max(4, distance * 0.18))
+  const sign = (a.user_id + b.user_id) % 2 === 0 ? 1 : -1
+  const nx = distance ? (-dy / distance) * bend * sign : 0
+  const ny = distance ? (dx / distance) * bend * sign : 0
+  const c1x = a.x + dx * 0.32 + nx
+  const c1y = a.y + dy * 0.32 + ny
+  const c2x = a.x + dx * 0.68 + nx
+  const c2y = a.y + dy * 0.68 + ny
+  return `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`
+}
+
+function linkClass(
+  kind: PlazaLink["kind"],
+  linkedToSelf = false,
+  linkedToSelected = false,
+): string {
+  if (kind === "human_chat") {
+    if (linkedToSelected) return "fill-none stroke-[#047857] stroke-[0.92] opacity-[0.85]"
+    if (linkedToSelf) return "fill-none stroke-[#047857] stroke-[0.62] opacity-[0.46]"
+    return "fill-none stroke-[#047857] stroke-[0.42] opacity-[0.14]"
+  }
+  if (kind === "deep_chat") {
+    if (linkedToSelected) return "fill-none stroke-primary stroke-[0.52] opacity-[0.68]"
+    if (linkedToSelf) return "fill-none stroke-primary stroke-[0.34] opacity-[0.34]"
+    return "fill-none stroke-primary stroke-[0.24] opacity-[0.12]"
+  }
+  if (linkedToSelected) return "fill-none stroke-ink-tertiary stroke-[0.28] opacity-[0.45]"
+  if (linkedToSelf) return "fill-none stroke-ink-tertiary stroke-[0.22] opacity-[0.24]"
+  return "fill-none stroke-ink-tertiary stroke-[0.16] opacity-[0.10]"
+}
+
+function nodeDepth(node: PlazaNode): number {
+  return Math.min(1, Math.max(0, (node.y - 10) / 82))
 }
 
 function genderLabel(g?: string | null): string | null {
