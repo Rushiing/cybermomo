@@ -290,7 +290,7 @@ function PlazaPoint({
   onLeave: () => void
 }) {
   const hook = node.hooks[0]
-  const showLabel = node.is_self || selected || active || (!dimmed && node.featured)
+  const showLabel = node.is_self || selected || active
   const depth = nodeDepth(node)
   const pointSize = node.is_self ? 18 : selected || active ? 15 : Math.round(7 + depth * 5)
   const haloSize = node.is_self ? 12 : selected || active ? 9 : 5
@@ -311,6 +311,7 @@ function PlazaPoint({
       }}
       title={node.nickname}
     >
+      <span className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full" />
       {hook && (
         <span className={`absolute left-5 -top-8 whitespace-nowrap rounded-full border border-white/80 bg-white/[0.88] backdrop-blur px-3 py-1.5 text-[11px] text-ink-secondary shadow-[0_8px_24px_rgba(31,41,55,0.08)] transition ${
           showLabel ? "opacity-100" : "opacity-0 group-hover:opacity-100"
@@ -590,9 +591,7 @@ function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | nu
   const nearIndex = new Map(nearIds.map((id, idx) => [id, idx]))
   const domainAnchors = domainAnchorMap(feed.nodes)
 
-  return {
-    ...feed,
-    nodes: feed.nodes.map((node, idx) => {
+  const positioned = feed.nodes.map((node, idx) => {
       if (node.is_self) {
         return { ...node, x: 52, y: 72 }
       }
@@ -613,6 +612,10 @@ function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | nu
         y: clamp(y, 13, 87),
       }
     })
+
+  return {
+    ...feed,
+    nodes: spreadNodes(positioned),
   }
 }
 
@@ -655,21 +658,67 @@ function nodeFieldPosition(
     }
     : fallbackAnchor
   return {
-    x: base.x + jitter(node.user_id, "x", 13),
-    y: base.y + jitter(node.user_id, "y", 11),
+    x: base.x + jitter(node.user_id, "x", 19),
+    y: base.y + jitter(node.user_id, "y", 16),
   }
 }
 
 function nearFieldPosition(index: number, total: number, userId: number): { x: number; y: number } {
-  const span = Math.min(150, 34 + Math.max(0, total - 1) * 18)
+  const span = Math.min(190, 48 + Math.max(0, total - 1) * 22)
   const start = 205 - span / 2
   const angle = (start + (span / Math.max(1, total - 1)) * index) * Math.PI / 180
-  const rx = 24 + stableUnit(`${userId}:rx`) * 8
-  const ry = 18 + stableUnit(`${userId}:ry`) * 7
+  const rx = 28 + stableUnit(`${userId}:rx`) * 10
+  const ry = 21 + stableUnit(`${userId}:ry`) * 8
   return {
     x: 52 + Math.cos(angle) * rx,
     y: 72 + Math.sin(angle) * ry,
   }
+}
+
+function spreadNodes(nodes: PlazaNode[]): PlazaNode[] {
+  const out = nodes.map(node => ({ ...node }))
+  const minDistance = 5.2
+  const selfRepelDistance = 8.8
+
+  for (let pass = 0; pass < 18; pass += 1) {
+    for (let i = 0; i < out.length; i += 1) {
+      for (let j = i + 1; j < out.length; j += 1) {
+        const a = out[i]
+        const b = out[j]
+        const desired = a.is_self || b.is_self ? selfRepelDistance : minDistance
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01
+        if (dist >= desired) continue
+
+        const push = (desired - dist) * 0.5
+        const nx = dx / dist
+        const ny = dy / dist
+        const aFixed = a.is_self
+        const bFixed = b.is_self
+        if (!aFixed) {
+          a.x -= nx * push
+          a.y -= ny * push
+        }
+        if (!bFixed) {
+          b.x += nx * push
+          b.y += ny * push
+        }
+      }
+    }
+
+    out.forEach(node => {
+      if (node.is_self) {
+        node.x = 52
+        node.y = 72
+        return
+      }
+      node.x = clamp(node.x, 8, 92)
+      node.y = clamp(node.y, 13, 87)
+    })
+  }
+
+  return out
 }
 
 function mix(a: number, b: number, t: number): number {
