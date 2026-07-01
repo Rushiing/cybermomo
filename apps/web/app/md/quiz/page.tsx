@@ -106,7 +106,7 @@ export default function QuizPage() {
           <section className="bg-bg-elevated border border-line-soft rounded-lg shadow-card p-7">
             <h1 className="text-[28px] font-semibold leading-tight mb-2 tracking-tight">灵魂快照 · 17 题 + 领域</h1>
             <p className="text-ink-secondary mb-3">17 道场景题 + 2 道领域题,生成你的 Agent 人格档案。慢慢来,我会认真读你的回答。</p>
-            <p className="text-ink-tertiary text-sm">这份档案只给你的 Agent 看。任何其他用户都看不到原文。</p>
+            <p className="text-ink-tertiary text-sm">这份档案你可以自己查看,也会交给你的 Agent 使用。任何其他用户都看不到原文。</p>
             <div className="mt-6">
               <button onClick={() => setStage("preset")} className="bg-primary text-white px-6 py-3 rounded-md font-medium hover:bg-primary-dark transition">
                 开始 →

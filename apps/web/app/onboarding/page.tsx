@@ -24,7 +24,7 @@ const SCREENS = [
       "接下来我们会用一组问题给你生成一份 .md。",
       "这份 .md = 你的 Agent 的人格说明书。",
     ],
-    strongLine: "它只给你自己的 Agent 看,永远不展示给任何其他用户。",
+    strongLine: "你可以自己查看,你的 Agent 会使用它;其他用户永远看不到原文。",
   },
   {
     title: "你管 Agent,但管不死 ta",

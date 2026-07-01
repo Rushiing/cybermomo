@@ -87,7 +87,7 @@ export default function MdBasicPage() {
       <main className="flex-1 max-w-[540px] w-full mx-auto px-8 pt-12 pb-32">
         <h1 className="text-2xl font-semibold mb-2">先互相认识下</h1>
         <p className="text-ink-secondary mb-9">
-          这些信息会显示给其他用户。<strong className="text-ink">.md 是另一回事</strong> — 那个只给你的 Agent 看。
+          这些信息会显示给其他用户。<strong className="text-ink">.md 是另一回事</strong> — 你本人可见,也会交给你的 Agent 使用,但不展示给其他用户。
         </p>
 
         {/* 头像 */}
@@ -190,4 +190,3 @@ function ChipsRow<T extends string>(p: {
     </div>
   )
 }
-

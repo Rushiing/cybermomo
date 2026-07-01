@@ -72,7 +72,7 @@ export default function ReviewPage() {
       <div className="bg-primary-soft border-b border-primary/[.18] px-8 py-3.5">
         <div className="max-w-[760px] mx-auto flex items-center gap-3 text-primary-dark text-[13px] leading-relaxed">
           <span>🔒</span>
-          <span>这是给你 Agent 的人格档案。<strong className="font-semibold">只你能看到</strong>,任何其他用户都看不到原文。</span>
+          <span>这是给你和你的 Agent 使用的人格档案。<strong className="font-semibold">你可以自己查看</strong>,任何其他用户都看不到原文。</span>
         </div>
       </div>
 

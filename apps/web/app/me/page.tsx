@@ -174,7 +174,7 @@ export default function MePage() {
                     <p className="text-sm text-ink-secondary leading-relaxed">{md.portrait_body[0]}</p>
                   )}
                   <div className="mt-4 text-xs text-ink-tertiary leading-relaxed">
-                    .md 不外露:这份档案只你能看,任何其他用户都看不到原文。
+                    这份 .md 对你本人可见,也会交给你的 Agent 使用;其他用户看不到原文。
                     要改方向,可以通过<strong className="text-ink">「跟自己 Agent 对话」</strong>慢慢说。
                     现在可以重做问卷整体覆盖。
                   </div>
