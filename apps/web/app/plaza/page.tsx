@@ -274,6 +274,8 @@ function ProfileDrawer({
   onInitiate: () => void
 }) {
   const cta = getPlazaCta(node, initiating, selfLinkKind)
+  const subject = pronounSubject(node.gender)
+  const possessive = pronounPossessive(node.gender)
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center px-4 pb-4 sm:items-center">
       <div className="absolute inset-0 bg-ink/25 backdrop-blur-sm" onClick={onClose} />
@@ -298,7 +300,7 @@ function ProfileDrawer({
 
         <div className="mt-5 space-y-4">
           <div>
-            <div className="text-xs text-ink-tertiary mb-2">TA 对外露出的钩子</div>
+            <div className="text-xs text-ink-tertiary mb-2">{subject}对外露出的钩子</div>
             <div className="flex flex-wrap gap-2">
               {(node.hooks.length ? node.hooks : ["还没冒泡"]).map(h => (
                 <span key={h} className="rounded-full bg-bg-elevated border border-line-soft px-2.5 py-1 text-xs text-ink-secondary">
@@ -321,8 +323,8 @@ function ProfileDrawer({
 
           <div className="rounded-md bg-bg-elevated border border-line-soft px-3.5 py-3 text-sm text-ink-secondary leading-relaxed">
             {node.connection_label
-              ? `TA 更看重「${node.connection_label}」。这只是对外名片里的公开标签,具体的人还得让 Agent 去聊。`
-              : "TA 的公开名片还很轻。让 Agent 先去试探,比真人直接破冰省力。"}
+              ? `${subject}更看重「${node.connection_label}」。这只是对外名片里的公开标签,具体的人还得让 Agent 去聊。`
+              : `${possessive}公开名片还很轻。让 Agent 先去试探,比真人直接破冰省力。`}
           </div>
 
           <div className="flex items-center justify-between text-xs text-ink-tertiary border-t border-line-soft pt-3">
@@ -341,7 +343,7 @@ function ProfileDrawer({
           </button>
           {!node.is_self && (
             <p className="text-[11px] text-ink-tertiary leading-relaxed mt-2.5 text-center">
-              聊完会回到个人房间生成简报。这里展示的是 TA 的对外名片,不是 TA 的 .md 原文。
+              聊完会回到个人房间生成简报。这里展示的是{possessive}对外名片,不是{possessive} .md 原文。
             </p>
           )}
           {node.is_self && (
@@ -371,21 +373,47 @@ function getPlazaCta(
   if (selfLinkKind === "human_chat") {
     return { label: "你们已经可以真人聊天", disabled: true }
   }
-  return { label: "让我的 Agent 去跟 TA 聊", disabled: false }
+  return { label: `让我的 Agent 去${talkTargetText(node.gender)}`, disabled: false }
 }
 
 function getPlazaStatusLabel(
   node: PlazaNode,
   selfLinkKind: PlazaLink["kind"] | null,
 ): string {
+  const subject = pronounSubject(node.gender)
+  const object = pronounObject(node.gender)
   if (node.is_self) return "你在这里"
   if (selfLinkKind === "human_chat") return "你们已经开了真人聊天"
-  if (selfLinkKind === "deep_chat") return "你的 Agent 已经试探过 TA"
-  if (selfLinkKind === "shallow_probe") return "你已经试探过 TA"
-  if (node.state === "human_chat") return "TA 有一场真人聊天"
-  if (node.state === "deep_chat") return "TA 有一场 Agent 互聊"
-  if (node.state === "shallow_probe") return "TA 被试探过"
+  if (selfLinkKind === "deep_chat") return `你的 Agent 已经试探过${object}`
+  if (selfLinkKind === "shallow_probe") return `你已经试探过${object}`
+  if (node.state === "human_chat") return `${subject}有一场真人聊天`
+  if (node.state === "deep_chat") return `${subject}有一场 Agent 互聊`
+  if (node.state === "shallow_probe") return `${subject}被试探过`
   return "游荡中"
+}
+
+function pronounSubject(gender?: string | null): string {
+  if (gender === "female") return "她"
+  if (gender === "male") return "他"
+  return "TA "
+}
+
+function pronounObject(gender?: string | null): string {
+  if (gender === "female") return "她"
+  if (gender === "male") return "他"
+  return " TA"
+}
+
+function pronounPossessive(gender?: string | null): string {
+  if (gender === "female") return "她的"
+  if (gender === "male") return "他的"
+  return "TA 的"
+}
+
+function talkTargetText(gender?: string | null): string {
+  if (gender === "female") return "跟她聊"
+  if (gender === "male") return "跟他聊"
+  return "跟 TA 聊"
 }
 
 function LegendDot({ label }: { label: string }) {
