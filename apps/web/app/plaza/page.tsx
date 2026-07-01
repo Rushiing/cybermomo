@@ -328,7 +328,8 @@ function PlazaPoint({
   onLeave: () => void
 }) {
   const hook = node.hooks[0]
-  const showLabel = node.is_self || selected || active
+  const showName = node.is_self || selected || active
+  const showHook = selected || active
   const depth = nodeDepth(node)
   const pointSize = node.is_self ? 18 : selected || active ? 15 : Math.round(7 + depth * 5)
   const haloSize = node.is_self ? 12 : selected || active ? 9 : 5
@@ -352,7 +353,7 @@ function PlazaPoint({
       <span className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full" />
       {hook && (
         <span className={`absolute left-5 -top-8 whitespace-nowrap rounded-full border border-white/80 bg-white/[0.88] backdrop-blur px-3 py-1.5 text-[11px] text-ink-secondary shadow-[0_8px_24px_rgba(31,41,55,0.08)] transition ${
-          showLabel ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          showHook ? "opacity-100" : "opacity-0 group-hover:opacity-100"
         }`}>
           {hook}
         </span>
@@ -378,7 +379,7 @@ function PlazaPoint({
         )}
       </span>
       <span className={`absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap text-[11px] text-ink-secondary transition ${
-        showLabel ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        showName ? "opacity-100" : "opacity-0 group-hover:opacity-100"
       }`}>
         {node.is_self ? "你" : node.nickname}
       </span>
@@ -632,10 +633,18 @@ function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | nu
     .sort((a, b) => a - b)
   const nearIndex = new Map(nearIds.map((id, idx) => [id, idx]))
   const domainAnchors = domainAnchorMap(feed.nodes)
+  const selfIndex = self ? feed.nodes.findIndex(node => node.user_id === self.user_id) : -1
+  const selfField = self
+    ? nodeFieldPosition(self, domainAnchors, Math.max(0, selfIndex))
+    : { x: 52, y: 72 }
+  const selfPosition = {
+    x: clamp(selfField.x, 18, 82),
+    y: clamp(selfField.y, 20, 80),
+  }
 
   const positioned = feed.nodes.map((node, idx) => {
       if (node.is_self) {
-        return { ...node, x: 52, y: 72 }
+        return { ...node, x: selfPosition.x, y: selfPosition.y }
       }
 
       const field = nodeFieldPosition(node, domainAnchors, idx)
@@ -643,7 +652,7 @@ function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | nu
       let y = field.y
       const near = nearIndex.get(node.user_id)
       if (near != null) {
-        const orbit = nearFieldPosition(near, nearIds.length, node.user_id)
+        const orbit = nearFieldPosition(near, nearIds.length, node.user_id, selfPosition)
         x = mix(field.x, orbit.x, 0.68)
         y = mix(field.y, orbit.y, 0.68)
       }
@@ -751,20 +760,26 @@ function makeFieldPulls(
   return pulls.slice(0, activeUserId ? 22 : 10)
 }
 
-function nearFieldPosition(index: number, total: number, userId: number): { x: number; y: number } {
+function nearFieldPosition(
+  index: number,
+  total: number,
+  userId: number,
+  center: { x: number; y: number },
+): { x: number; y: number } {
   const span = Math.min(190, 48 + Math.max(0, total - 1) * 22)
   const start = 205 - span / 2
   const angle = (start + (span / Math.max(1, total - 1)) * index) * Math.PI / 180
   const rx = 28 + stableUnit(`${userId}:rx`) * 10
   const ry = 21 + stableUnit(`${userId}:ry`) * 8
   return {
-    x: 52 + Math.cos(angle) * rx,
-    y: 72 + Math.sin(angle) * ry,
+    x: center.x + Math.cos(angle) * rx,
+    y: center.y + Math.sin(angle) * ry,
   }
 }
 
 function spreadNodes(nodes: PlazaNode[]): PlazaNode[] {
   const out = nodes.map(node => ({ ...node }))
+  const fixed = new Map(out.filter(node => node.is_self).map(node => [node.user_id, { x: node.x, y: node.y }]))
   const minDistance = 5.2
   const selfRepelDistance = 8.8
 
@@ -796,9 +811,10 @@ function spreadNodes(nodes: PlazaNode[]): PlazaNode[] {
     }
 
     out.forEach(node => {
-      if (node.is_self) {
-        node.x = 52
-        node.y = 72
+      const fixedPosition = fixed.get(node.user_id)
+      if (fixedPosition) {
+        node.x = fixedPosition.x
+        node.y = fixedPosition.y
         return
       }
       node.x = clamp(node.x, 8, 92)
