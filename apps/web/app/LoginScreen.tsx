@@ -184,12 +184,12 @@ export default function LoginScreen() {
 
       <p className="mt-7 text-xs text-ink-tertiary text-center max-w-sm">
         登录即表示同意{' '}
-        <a className="text-ink-secondary hover:text-ink underline-offset-2 hover:underline" href="#">
+        <a className="text-ink-secondary hover:text-ink underline-offset-2 hover:underline" href="/terms">
           用户协议
         </a>
         {' '}与{' '}
-        <a className="text-ink-secondary hover:text-ink underline-offset-2 hover:underline" href="#">
-          隐私协议
+        <a className="text-ink-secondary hover:text-ink underline-offset-2 hover:underline" href="/privacy">
+          隐私政策
         </a>
       </p>
     </main>

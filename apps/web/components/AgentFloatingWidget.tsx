@@ -30,6 +30,8 @@ const HIDE_PATH_PREFIXES = [
   "/changelog",
   "/signup",
   "/signin",
+  "/terms",
+  "/privacy",
 ]
 
 function isHidden(pathname: string | null): boolean {
