@@ -37,6 +37,14 @@ type FieldCloudView = {
   weight: number
 }
 
+const FIELD_ANCHORS = [
+  { x: 23, y: 30, tone: "mint" as const },
+  { x: 52, y: 24, tone: "sky" as const },
+  { x: 77, y: 39, tone: "gold" as const },
+  { x: 31, y: 68, tone: "slate" as const },
+  { x: 65, y: 71, tone: "mint" as const },
+]
+
 export default function PlazaPage() {
   const [feed, setFeed] = useState<PlazaFeedResponse | null>(null)
   const [selected, setSelected] = useState<PlazaNode | null>(null)
@@ -90,29 +98,39 @@ export default function PlazaPage() {
     }
   }
 
+  const plazaFeed = useMemo(() => layoutPlazaFeed(feed), [feed])
   const nodeById = useMemo(() => {
     const out: Record<number, PlazaNode> = {}
-    feed?.nodes.forEach(n => { out[n.user_id] = n })
+    plazaFeed?.nodes.forEach(n => { out[n.user_id] = n })
     return out
-  }, [feed])
+  }, [plazaFeed])
   const visibleLinkKinds = useMemo(() => {
-    return new Set(feed?.links.map(link => link.kind) || [])
-  }, [feed])
+    return new Set(plazaFeed?.links.map(link => link.kind) || [])
+  }, [plazaFeed])
   const selfUserId = useMemo(
-    () => feed?.nodes.find(n => n.is_self)?.user_id || null,
-    [feed],
+    () => plazaFeed?.nodes.find(n => n.is_self)?.user_id || null,
+    [plazaFeed],
   )
   const selectedSelfLinkKind = useMemo(() => {
-    if (!feed || !selected || !selfUserId) return null
-    return feed.links.find(link =>
+    if (!plazaFeed || !selected || !selfUserId) return null
+    return plazaFeed.links.find(link =>
       (link.source_user_id === selfUserId && link.target_user_id === selected.user_id)
       || (link.target_user_id === selfUserId && link.source_user_id === selected.user_id)
     )?.kind || null
-  }, [feed, selected, selfUserId])
+  }, [plazaFeed, selected, selfUserId])
   const activeUserId = selected?.user_id || hoveredId
+  const activeRelatedIds = useMemo(() => {
+    const out = new Set<number>()
+    if (!plazaFeed || !activeUserId) return out
+    plazaFeed.links.forEach(link => {
+      if (link.source_user_id === activeUserId) out.add(link.target_user_id)
+      if (link.target_user_id === activeUserId) out.add(link.source_user_id)
+    })
+    return out
+  }, [plazaFeed, activeUserId])
   const fieldClouds = useMemo(
-    () => makeFieldClouds(feed?.nodes || []),
-    [feed],
+    () => makeFieldClouds(plazaFeed?.nodes || []),
+    [plazaFeed],
   )
 
   return (
@@ -168,13 +186,13 @@ export default function PlazaPage() {
             </div>
           )}
 
-          {feed && feed.nodes.length === 0 && (
+          {plazaFeed && plazaFeed.nodes.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-secondary">
               广场还没人。先完成 .md,让你的 Agent 出现在这里。
             </div>
           )}
 
-          {feed && (
+          {plazaFeed && (
             <>
               <div className="absolute inset-0 pointer-events-none">
                 {fieldClouds.map(cloud => (
@@ -183,7 +201,7 @@ export default function PlazaPage() {
               </div>
 
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
-                {feed.links.map((link, idx) => {
+                {plazaFeed.links.map((link, idx) => {
                   const a = nodeById[link.source_user_id]
                   const b = nodeById[link.target_user_id]
                   if (!a || !b) return null
@@ -217,13 +235,13 @@ export default function PlazaPage() {
                 )}
               </div>
 
-              {feed.nodes.map(node => (
+              {plazaFeed.nodes.map(node => (
                 <PlazaPoint
                   key={node.user_id}
                   node={node}
                   selected={selected?.user_id === node.user_id}
                   active={activeUserId === node.user_id}
-                  dimmed={!!activeUserId && activeUserId !== node.user_id}
+                  dimmed={!!activeUserId && activeUserId !== node.user_id && !activeRelatedIds.has(node.user_id)}
                   onSelect={() => setSelected(node)}
                   onHover={() => setHoveredId(node.user_id)}
                   onLeave={() => setHoveredId(current => current === node.user_id ? null : current)}
@@ -231,7 +249,7 @@ export default function PlazaPage() {
               ))}
 
               <div className="absolute left-4 bottom-4 text-[11px] text-ink-tertiary">
-                上次刷新 {new Date(feed.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                上次刷新 {new Date(plazaFeed.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
               </div>
             </>
           )}
@@ -241,7 +259,7 @@ export default function PlazaPage() {
       {selected && (
         <ProfileDrawer
           node={selected}
-          linkCount={feed?.links.filter(l =>
+          linkCount={plazaFeed?.links.filter(l =>
             l.source_user_id === selected.user_id || l.target_user_id === selected.user_id
           ).length || 0}
           selfLinkKind={selectedSelfLinkKind}
@@ -541,6 +559,64 @@ function FieldCloud({ cloud }: { cloud: FieldCloudView }) {
 }
 
 function makeFieldClouds(nodes: PlazaNode[]): FieldCloudView[] {
+  const domains = topDomains(nodes)
+  return domains.map(({ label, count }, idx) => {
+    const anchor = FIELD_ANCHORS[idx % FIELD_ANCHORS.length]
+    return {
+      label,
+      x: anchor.x,
+      y: anchor.y,
+      width: 90 + Math.min(90, count * 18),
+      tone: anchor.tone,
+      weight: Math.min(1, count / 4),
+    }
+  })
+}
+
+function layoutPlazaFeed(feed: PlazaFeedResponse | null): PlazaFeedResponse | null {
+  if (!feed) return null
+  const self = feed.nodes.find(node => node.is_self)
+  const selfUserId = self?.user_id || null
+  const linkedToSelf = new Set<number>()
+  feed.links.forEach(link => {
+    if (!selfUserId) return
+    if (link.source_user_id === selfUserId) linkedToSelf.add(link.target_user_id)
+    if (link.target_user_id === selfUserId) linkedToSelf.add(link.source_user_id)
+  })
+  const nearIds = feed.nodes
+    .filter(node => linkedToSelf.has(node.user_id))
+    .map(node => node.user_id)
+    .sort((a, b) => a - b)
+  const nearIndex = new Map(nearIds.map((id, idx) => [id, idx]))
+  const domainAnchors = domainAnchorMap(feed.nodes)
+
+  return {
+    ...feed,
+    nodes: feed.nodes.map((node, idx) => {
+      if (node.is_self) {
+        return { ...node, x: 52, y: 72 }
+      }
+
+      const field = nodeFieldPosition(node, domainAnchors, idx)
+      let x = field.x
+      let y = field.y
+      const near = nearIndex.get(node.user_id)
+      if (near != null) {
+        const orbit = nearFieldPosition(near, nearIds.length, node.user_id)
+        x = mix(field.x, orbit.x, 0.68)
+        y = mix(field.y, orbit.y, 0.68)
+      }
+
+      return {
+        ...node,
+        x: clamp(x, 8, 92),
+        y: clamp(y, 13, 87),
+      }
+    })
+  }
+}
+
+function topDomains(nodes: PlazaNode[]): Array<{ label: string; count: number }> {
   const counts = new Map<string, number>()
   nodes.forEach(node => {
     node.domains.slice(0, 3).forEach(domain => {
@@ -549,19 +625,63 @@ function makeFieldClouds(nodes: PlazaNode[]): FieldCloudView[] {
   })
   return Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
-    .slice(0, 5)
-    .map(([label, count], idx) => {
-      const seed = stableNumber(label)
-      const tones: FieldCloudView["tone"][] = ["mint", "sky", "gold", "slate", "mint"]
-      return {
-        label,
-        x: 18 + ((seed * 67 + idx * 19) % 64),
-        y: 18 + ((seed * 41 + idx * 23) % 62),
-        width: 90 + Math.min(90, count * 18),
-        tone: tones[idx % tones.length],
-        weight: Math.min(1, count / 4),
-      }
-    })
+    .slice(0, FIELD_ANCHORS.length)
+    .map(([label, count]) => ({ label, count }))
+}
+
+function domainAnchorMap(nodes: PlazaNode[]): Map<string, { x: number; y: number }> {
+  const out = new Map<string, { x: number; y: number }>()
+  topDomains(nodes).forEach(({ label }, idx) => {
+    const anchor = FIELD_ANCHORS[idx % FIELD_ANCHORS.length]
+    out.set(label, { x: anchor.x, y: anchor.y })
+  })
+  return out
+}
+
+function nodeFieldPosition(
+  node: PlazaNode,
+  domainAnchors: Map<string, { x: number; y: number }>,
+  idx: number,
+): { x: number; y: number } {
+  const anchors = node.domains
+    .slice(0, 2)
+    .map(domain => domainAnchors.get(domain))
+    .filter(Boolean) as Array<{ x: number; y: number }>
+  const fallbackAnchor = FIELD_ANCHORS[(stableNumber(`${node.user_id}:field`) + idx) % FIELD_ANCHORS.length]
+  const base = anchors.length
+    ? {
+      x: anchors.reduce((sum, a) => sum + a.x, 0) / anchors.length,
+      y: anchors.reduce((sum, a) => sum + a.y, 0) / anchors.length,
+    }
+    : fallbackAnchor
+  return {
+    x: base.x + jitter(node.user_id, "x", 13),
+    y: base.y + jitter(node.user_id, "y", 11),
+  }
+}
+
+function nearFieldPosition(index: number, total: number, userId: number): { x: number; y: number } {
+  const span = Math.min(150, 34 + Math.max(0, total - 1) * 18)
+  const start = 205 - span / 2
+  const angle = (start + (span / Math.max(1, total - 1)) * index) * Math.PI / 180
+  const rx = 24 + stableUnit(`${userId}:rx`) * 8
+  const ry = 18 + stableUnit(`${userId}:ry`) * 7
+  return {
+    x: 52 + Math.cos(angle) * rx,
+    y: 72 + Math.sin(angle) * ry,
+  }
+}
+
+function mix(a: number, b: number, t: number): number {
+  return a * (1 - t) + b * t
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function jitter(userId: number, salt: string, amount: number): number {
+  return (stableUnit(`${userId}:${salt}`) - 0.5) * amount
 }
 
 function stableNumber(input: string): number {
@@ -570,6 +690,10 @@ function stableNumber(input: string): number {
     hash = (hash * 31 + input.charCodeAt(i)) % 9973
   }
   return hash
+}
+
+function stableUnit(input: string): number {
+  return (stableNumber(input) % 1000) / 999
 }
 
 function shouldRevealLink(
