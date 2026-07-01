@@ -242,7 +242,10 @@ export default function PlazaPage() {
                   selected={selected?.user_id === node.user_id}
                   active={activeUserId === node.user_id}
                   dimmed={!!activeUserId && activeUserId !== node.user_id && !activeRelatedIds.has(node.user_id)}
-                  onSelect={() => setSelected(node)}
+                  onSelect={() => {
+                    setHoveredId(null)
+                    setSelected(node)
+                  }}
                   onHover={() => setHoveredId(node.user_id)}
                   onLeave={() => setHoveredId(current => current === node.user_id ? null : current)}
                 />
@@ -370,9 +373,9 @@ function ProfileDrawer({
   const subject = pronounSubject(node.gender)
   const possessive = pronounPossessive(node.gender)
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center px-4 pb-4 sm:items-center">
-      <div className="absolute inset-0 bg-ink/25 backdrop-blur-sm" onClick={onClose} />
-      <aside className="relative w-full max-w-[460px] bg-bg rounded-lg border border-line-soft shadow-modal px-5 py-5">
+    <div className="fixed inset-0 z-[220] flex items-end justify-center px-4 pb-4 sm:items-center">
+      <div className="absolute inset-0 z-0 bg-bg/72 backdrop-blur-md" onClick={onClose} />
+      <aside className="relative z-10 w-full max-w-[460px] bg-bg rounded-lg border border-line-soft shadow-modal px-5 py-5">
         <header className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
