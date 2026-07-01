@@ -28,9 +28,19 @@ const LINK_LABEL: Record<PlazaLink["kind"], string> = {
   human_chat: "真人聊天",
 }
 
+type FieldCloudView = {
+  label: string
+  x: number
+  y: number
+  width: number
+  tone: "mint" | "sky" | "gold" | "slate"
+  weight: number
+}
+
 export default function PlazaPage() {
   const [feed, setFeed] = useState<PlazaFeedResponse | null>(null)
   const [selected, setSelected] = useState<PlazaNode | null>(null)
+  const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [initiatingId, setInitiatingId] = useState<number | null>(null)
   const [handoff, setHandoff] = useState<{
@@ -99,6 +109,11 @@ export default function PlazaPage() {
       || (link.target_user_id === selfUserId && link.source_user_id === selected.user_id)
     )?.kind || null
   }, [feed, selected, selfUserId])
+  const activeUserId = selected?.user_id || hoveredId
+  const fieldClouds = useMemo(
+    () => makeFieldClouds(feed?.nodes || []),
+    [feed],
+  )
 
   return (
     <div className="min-h-screen">
@@ -140,9 +155,10 @@ export default function PlazaPage() {
           </div>
         )}
 
-        <section className="relative h-[clamp(680px,76vh,960px)] bg-[#fbfaf7] border border-line-soft rounded-lg overflow-hidden shadow-card">
-          <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(0,174,66,0.055),transparent_31%,rgba(31,41,55,0.035)_58%,transparent_82%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(247,250,247,0.72)_48%,rgba(255,255,255,0.98))]" />
-          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-white/90 to-transparent" />
+        <section className="relative h-[clamp(680px,76vh,960px)] bg-[#f7f9f8] border border-line-soft rounded-lg overflow-hidden shadow-card">
+          <div className="absolute inset-0 bg-[linear-gradient(128deg,rgba(0,174,66,0.05),transparent_28%,rgba(14,165,233,0.035)_55%,transparent_82%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,249,248,0.78)_50%,rgba(255,255,255,0.98))]" />
+          <div className="absolute inset-0 opacity-[0.18] bg-[linear-gradient(115deg,transparent_0%,transparent_46%,rgba(31,41,55,0.12)_46.2%,transparent_46.7%,transparent_100%)] bg-[length:180px_180px]" />
+          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-white/92 to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-white/95 to-transparent" />
           <div className="absolute inset-0 shadow-[inset_0_30px_90px_rgba(31,41,55,0.035),inset_0_-28px_80px_rgba(0,174,66,0.055)]" />
 
@@ -160,20 +176,27 @@ export default function PlazaPage() {
 
           {feed && (
             <>
+              <div className="absolute inset-0 pointer-events-none">
+                {fieldClouds.map(cloud => (
+                  <FieldCloud key={cloud.label} cloud={cloud} />
+                ))}
+              </div>
+
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
-                {feed.links.map(link => {
+                {feed.links.map((link, idx) => {
                   const a = nodeById[link.source_user_id]
                   const b = nodeById[link.target_user_id]
                   if (!a || !b) return null
                   const linkedToSelf = selfUserId === link.source_user_id || selfUserId === link.target_user_id
-                  const linkedToSelected = !!selected && (
-                    selected.user_id === link.source_user_id || selected.user_id === link.target_user_id
+                  const linkedToActive = !!activeUserId && (
+                    activeUserId === link.source_user_id || activeUserId === link.target_user_id
                   )
+                  if (!shouldRevealLink(link, idx, linkedToSelf, linkedToActive, !!activeUserId)) return null
                   return (
                     <path
                       key={`${link.source_user_id}-${link.target_user_id}`}
                       d={linkPath(a, b)}
-                      className={linkClass(link.kind, linkedToSelf, linkedToSelected)}
+                      className={linkClass(link.kind, linkedToSelf, linkedToActive, !!activeUserId)}
                       strokeDasharray={link.kind === "shallow_probe" ? "0.8 2.1" : undefined}
                       vectorEffect="non-scaling-stroke"
                     />
@@ -199,7 +222,11 @@ export default function PlazaPage() {
                   key={node.user_id}
                   node={node}
                   selected={selected?.user_id === node.user_id}
+                  active={activeUserId === node.user_id}
+                  dimmed={!!activeUserId && activeUserId !== node.user_id}
                   onSelect={() => setSelected(node)}
+                  onHover={() => setHoveredId(node.user_id)}
+                  onLeave={() => setHoveredId(current => current === node.user_id ? null : current)}
                 />
               ))}
 
@@ -230,25 +257,39 @@ export default function PlazaPage() {
 function PlazaPoint({
   node,
   selected,
+  active,
+  dimmed,
   onSelect,
+  onHover,
+  onLeave,
 }: {
   node: PlazaNode
   selected: boolean
+  active: boolean
+  dimmed: boolean
   onSelect: () => void
+  onHover: () => void
+  onLeave: () => void
 }) {
   const hook = node.hooks[0]
-  const showLabel = node.is_self || selected || node.featured
+  const showLabel = node.is_self || selected || active || (!dimmed && node.featured)
   const depth = nodeDepth(node)
-  const pointSize = node.is_self ? 18 : selected ? 15 : Math.round(8 + depth * 5)
-  const haloSize = node.is_self ? 12 : selected ? 9 : 5
+  const pointSize = node.is_self ? 18 : selected || active ? 15 : Math.round(7 + depth * 5)
+  const haloSize = node.is_self ? 12 : selected || active ? 9 : 5
+  const drift = nodeDrift(node.user_id)
   return (
     <button
       onClick={onSelect}
-      className="absolute -translate-x-1/2 -translate-y-1/2 group text-left outline-none"
+      onMouseEnter={onHover}
+      onMouseLeave={onLeave}
+      className={`absolute -translate-x-1/2 -translate-y-1/2 group text-left outline-none transition-opacity duration-300 ${
+        dimmed ? "opacity-45 hover:opacity-100" : "opacity-100"
+      }`}
       style={{
         left: `${node.x}%`,
         top: `${node.y}%`,
         zIndex: Math.round(10 + node.y),
+        animation: `plaza-drift ${drift.duration}s ease-in-out ${drift.delay}s infinite alternate`,
       }}
       title={node.nickname}
     >
@@ -263,7 +304,7 @@ function PlazaPoint({
         className={`relative flex items-center justify-center rounded-full transition duration-200 ${
           node.is_self
             ? "bg-primary shadow-[0_14px_32px_rgba(0,174,66,0.28)]"
-            : selected
+            : selected || active
               ? "bg-primary-dark shadow-[0_10px_28px_rgba(0,174,66,0.22)]"
               : "bg-primary/75 shadow-[0_8px_22px_rgba(0,174,66,0.12)] group-hover:bg-primary"
         }`}
@@ -272,7 +313,7 @@ function PlazaPoint({
           height: pointSize,
           boxShadow: node.is_self
             ? `0 0 0 ${haloSize}px rgba(0,174,66,0.12),0 18px 38px rgba(0,174,66,0.28)`
-            : `0 0 0 ${haloSize}px rgba(0,174,66,${selected ? 0.12 : 0.055}),0 10px 24px rgba(31,41,55,0.10)`,
+            : `0 0 0 ${haloSize}px rgba(0,174,66,${selected || active ? 0.12 : 0.05}),0 10px 24px rgba(31,41,55,0.10)`,
         }}
       >
         {(node.state === "deep_chat" || node.state === "human_chat") && (
@@ -284,6 +325,9 @@ function PlazaPoint({
       }`}>
         {node.is_self ? "你" : node.nickname}
       </span>
+      {node.is_self && (
+        <span className="absolute left-1/2 top-9 -translate-x-1/2 w-px h-7 bg-gradient-to-b from-primary/35 to-transparent" />
+      )}
     </button>
   )
 }
@@ -474,6 +518,72 @@ function LegendLine({ label, kind }: { label: string; kind: PlazaLink["kind"] })
   )
 }
 
+function FieldCloud({ cloud }: { cloud: FieldCloudView }) {
+  const toneClass: Record<FieldCloudView["tone"], string> = {
+    mint: "border-primary/15 text-primary-dark bg-primary/[0.035]",
+    sky: "border-sky-500/15 text-sky-900 bg-sky-500/[0.035]",
+    gold: "border-amber-500/18 text-amber-900 bg-amber-400/[0.045]",
+    slate: "border-slate-400/18 text-slate-700 bg-slate-500/[0.035]",
+  }
+  return (
+    <div
+      className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border backdrop-blur-[2px] px-5 py-2.5 text-[11px] shadow-[0_18px_60px_rgba(31,41,55,0.055)] ${toneClass[cloud.tone]}`}
+      style={{
+        left: `${cloud.x}%`,
+        top: `${cloud.y}%`,
+        minWidth: cloud.width,
+        opacity: 0.55 + cloud.weight * 0.12,
+      }}
+    >
+      {cloud.label}
+    </div>
+  )
+}
+
+function makeFieldClouds(nodes: PlazaNode[]): FieldCloudView[] {
+  const counts = new Map<string, number>()
+  nodes.forEach(node => {
+    node.domains.slice(0, 3).forEach(domain => {
+      counts.set(domain, (counts.get(domain) || 0) + 1)
+    })
+  })
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
+    .slice(0, 5)
+    .map(([label, count], idx) => {
+      const seed = stableNumber(label)
+      const tones: FieldCloudView["tone"][] = ["mint", "sky", "gold", "slate", "mint"]
+      return {
+        label,
+        x: 18 + ((seed * 67 + idx * 19) % 64),
+        y: 18 + ((seed * 41 + idx * 23) % 62),
+        width: 90 + Math.min(90, count * 18),
+        tone: tones[idx % tones.length],
+        weight: Math.min(1, count / 4),
+      }
+    })
+}
+
+function stableNumber(input: string): number {
+  let hash = 0
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) % 9973
+  }
+  return hash
+}
+
+function shouldRevealLink(
+  link: PlazaLink,
+  index: number,
+  linkedToSelf: boolean,
+  linkedToActive: boolean,
+  hasActive: boolean,
+): boolean {
+  if (hasActive) return linkedToActive
+  if (linkedToSelf) return index % 2 === 0
+  return link.kind === "human_chat" && index % 3 === 0
+}
+
 function linkPath(a: PlazaNode, b: PlazaNode): string {
   const dx = b.x - a.x
   const dy = b.y - a.y
@@ -492,25 +602,34 @@ function linkPath(a: PlazaNode, b: PlazaNode): string {
 function linkClass(
   kind: PlazaLink["kind"],
   linkedToSelf = false,
-  linkedToSelected = false,
+  linkedToActive = false,
+  hasActive = false,
 ): string {
   if (kind === "human_chat") {
-    if (linkedToSelected) return "fill-none stroke-[#047857] stroke-[0.92] opacity-[0.85]"
-    if (linkedToSelf) return "fill-none stroke-[#047857] stroke-[0.62] opacity-[0.46]"
+    if (linkedToActive) return "fill-none stroke-[#047857] stroke-[0.92] opacity-[0.85]"
+    if (linkedToSelf && !hasActive) return "fill-none stroke-[#047857] stroke-[0.62] opacity-[0.46]"
     return "fill-none stroke-[#047857] stroke-[0.42] opacity-[0.14]"
   }
   if (kind === "deep_chat") {
-    if (linkedToSelected) return "fill-none stroke-primary stroke-[0.52] opacity-[0.68]"
-    if (linkedToSelf) return "fill-none stroke-primary stroke-[0.34] opacity-[0.34]"
+    if (linkedToActive) return "fill-none stroke-primary stroke-[0.52] opacity-[0.68]"
+    if (linkedToSelf && !hasActive) return "fill-none stroke-primary stroke-[0.34] opacity-[0.34]"
     return "fill-none stroke-primary stroke-[0.24] opacity-[0.12]"
   }
-  if (linkedToSelected) return "fill-none stroke-ink-tertiary stroke-[0.28] opacity-[0.45]"
-  if (linkedToSelf) return "fill-none stroke-ink-tertiary stroke-[0.22] opacity-[0.24]"
+  if (linkedToActive) return "fill-none stroke-ink-tertiary stroke-[0.28] opacity-[0.45]"
+  if (linkedToSelf && !hasActive) return "fill-none stroke-ink-tertiary stroke-[0.22] opacity-[0.24]"
   return "fill-none stroke-ink-tertiary stroke-[0.16] opacity-[0.10]"
 }
 
 function nodeDepth(node: PlazaNode): number {
   return Math.min(1, Math.max(0, (node.y - 10) / 82))
+}
+
+function nodeDrift(userId: number): { duration: number; delay: number } {
+  const base = 7 + (userId % 5)
+  return {
+    duration: base,
+    delay: -1 * (userId % 7),
+  }
 }
 
 function genderLabel(g?: string | null): string | null {
