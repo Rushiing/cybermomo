@@ -9,7 +9,7 @@
  * dev 模式额外发 X-Mock-User-Id(后端在 cookie 缺失时 fallback 到这个头)。
  */
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || ""
+const BASE = process.env.NEXT_PUBLIC_API_CLIENT_BASE || ""
 const REQUEST_TIMEOUT_MS = 15_000
 
 // 仅 dev 模式打开 mock auth header。默认 false(codex review P1-6):本地联调要

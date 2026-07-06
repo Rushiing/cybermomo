@@ -10,6 +10,8 @@
 #
 # 关键:NEXT_PUBLIC_* 必须在 BUILD 时就有,Next.js 会 bake 进 client bundle。
 # Railway service Variables 在 Dockerfile build 阶段可用,所以这块没问题。
+# API_PROXY_TARGET 给 Next rewrites 用,线上指向后端内网地址,避免浏览器直连
+# backend 公网域名抖动 / CORS 问题。
 
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -21,9 +23,11 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-f
 FROM node:20-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_API_URL
+ARG API_PROXY_TARGET
 # 默认 false(audit P0-3):build 默认安全,本地联调需显式 --build-arg NEXT_PUBLIC_DEV_MOCK_AUTH=true
 ARG NEXT_PUBLIC_DEV_MOCK_AUTH=false
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV API_PROXY_TARGET=${API_PROXY_TARGET}
 ENV NEXT_PUBLIC_DEV_MOCK_AUTH=${NEXT_PUBLIC_DEV_MOCK_AUTH}
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules

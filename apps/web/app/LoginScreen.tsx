@@ -14,7 +14,7 @@ import { useState, type KeyboardEvent } from "react"
 
 import { api, isDevMockAuth, type LoginRequest, type UserMeResponse } from "@/lib/api"
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || ""
+const BASE = process.env.NEXT_PUBLIC_API_CLIENT_BASE || ""
 
 const AUTH_ERROR_LABEL: Record<string, string> = {
   state_mismatch: "登录会话过期了,请重试。",
