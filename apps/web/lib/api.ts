@@ -10,6 +10,7 @@
  */
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || ""
+const REQUEST_TIMEOUT_MS = 15_000
 
 // 仅 dev 模式打开 mock auth header。默认 false(codex review P1-6):本地联调要
 // 显式设 NEXT_PUBLIC_DEV_MOCK_AUTH=true,否则不发 X-Mock-User-Id,完全依赖 cookie。
@@ -78,9 +79,12 @@ async function _fetchWithRetry(url: string, init: RequestInit): Promise<Response
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = `${BASE}${path}`
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   const init: RequestInit = {
     method,
     credentials: "include",  // 关键:浏览器带上 session cookie 跨域请求
+    signal: controller.signal,
     headers: {
       "Content-Type": "application/json",
       ...getAuthHeader(),
@@ -89,21 +93,33 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) {
     init.body = JSON.stringify(body)
   }
-  const resp = await _fetchWithRetry(url, init)
-  const text = await resp.text()
-  let data: any = null
-  if (text) {
-    try {
-      data = JSON.parse(text)
-    } catch {
-      data = text
+  try {
+    const resp = await _fetchWithRetry(url, init)
+    const text = await resp.text()
+    let data: any = null
+    if (text) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = text
+      }
     }
+    if (!resp.ok) {
+      const detail = (data && data.detail) || resp.statusText
+      throw new ApiError(resp.status, detail)
+    }
+    return data as T
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new ApiError(408, "请求超时,请确认后端服务和数据库是否正常。")
+    }
+    if (e instanceof TypeError) {
+      throw new ApiError(0, "无法连接后端服务,请确认 API 已启动且 CORS 配置正确。")
+    }
+    throw e
+  } finally {
+    globalThis.clearTimeout(timeoutId)
   }
-  if (!resp.ok) {
-    const detail = (data && data.detail) || resp.statusText
-    throw new ApiError(resp.status, detail)
-  }
-  return data as T
 }
 
 /**
