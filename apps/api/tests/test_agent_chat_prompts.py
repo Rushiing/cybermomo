@@ -155,7 +155,7 @@ def test_platform_system_keeps_anti_synthetic_constraints():
     assert "禁用开场套话" in PLATFORM_SYSTEM
     assert "禁用结尾甩问" in PLATFORM_SYSTEM
     assert "禁用 AI 客气助词" in PLATFORM_SYSTEM
-    assert "真人审" in PLATFORM_SYSTEM
+    assert "真人最后会读这场聊天" in PLATFORM_SYSTEM
     assert "两个 AI 在客气地互相恭维" in PLATFORM_SYSTEM
     assert "很高兴认识你" in PLATFORM_SYSTEM
     # peer demographic 不当谈资(voice audit 2026-05-15 命中 chat_id=56:
@@ -187,7 +187,7 @@ async def test_turn_prompt_template_injects_peer_block(
         speaker_user_id=user_a.id,
         turn_number=1,
         max_turns=2,
-        md_profile={},
+        md_profile_text="",
         hooks=(await db_session.execute(select(MatchHook))).scalars().all(),
         history=[],
         avoid_topic_refs=[],
@@ -195,6 +195,132 @@ async def test_turn_prompt_template_injects_peer_block(
     )
 
     assert "<MOCK_PEER_BLOCK>" in captured_prompts[0]
+
+
+async def test_turn_prompt_template_injects_voice_card(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, _ = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload())
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_a.id,
+        turn_number=1,
+        max_turns=10,
+        md_profile_text="profile text",
+        voice_card_text="<VOICE_CARD>",
+        hooks=(await db_session.execute(select(MatchHook))).scalars().all(),
+        history=[],
+        avoid_topic_refs=[],
+    )
+
+    assert "你的内部说话策略" in captured_prompts[0]
+    assert "<VOICE_CARD>" in captured_prompts[0]
+    assert "第 8 轮之前不要自然收尾" in captured_prompts[0]
+
+
+async def test_topic_strategy_nudges_after_sticky_topic(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, user_b = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload(topic_ref="topic_boundary"))
+
+    hooks = (await db_session.execute(select(MatchHook))).scalars().all()
+    hooks.append(
+        MatchHook(
+            match_id=match.id,
+            target_user_id=user_a.id,
+            matchpoint_id=1,
+            topic_id="topic_boundary",
+            category="生活方式",
+            match_type="同类共鸣",
+            hook_text="聊聊亲密关系里各自需要多少留白",
+            sensitivity_level=1,
+        )
+    )
+    history = [
+        AgentChatMessage(speaker_user_id=user_a.id, turn=1, topic_ref="topic_a", intent="probe", utterance="a"),
+        AgentChatMessage(speaker_user_id=user_b.id, turn=2, topic_ref="topic_a", intent="share", utterance="b"),
+        AgentChatMessage(speaker_user_id=user_a.id, turn=3, topic_ref="topic_a", intent="probe", utterance="c"),
+        AgentChatMessage(speaker_user_id=user_b.id, turn=4, topic_ref="topic_a", intent="share", utterance="d"),
+    ]
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_a.id,
+        turn_number=5,
+        max_turns=10,
+        md_profile_text="profile text",
+        hooks=hooks,
+        history=history,
+        avoid_topic_refs=[],
+    )
+
+    prompt = captured_prompts[0]
+    assert "当前话题 topic_a 已连续 4 轮" in prompt
+    assert "不要继续深挖 topic_a" in prompt
+    assert "topic_boundary" in prompt
+
+
+async def test_topic_strategy_nudges_mid_chat_coverage(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, user_b = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload())
+
+    history = [
+        AgentChatMessage(speaker_user_id=user_a.id, turn=1, topic_ref="topic_a", intent="probe", utterance="a"),
+        AgentChatMessage(speaker_user_id=user_b.id, turn=2, topic_ref="topic_a", intent="share", utterance="b"),
+    ]
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_a.id,
+        turn_number=5,
+        max_turns=10,
+        md_profile_text="profile text",
+        hooks=(await db_session.execute(select(MatchHook))).scalars().all(),
+        history=history,
+        avoid_topic_refs=[],
+    )
+
+    prompt = captured_prompts[0]
+    assert "中段补证据" in prompt
+    assert "边界 / 生活节奏 / 真实摩擦" in prompt
 
 
 async def test_direction_hint_only_injected_for_target_side(
@@ -260,7 +386,7 @@ async def test_avoid_topic_refs_render_redispatch_block(
         speaker_user_id=user_a.id,
         turn_number=1,
         max_turns=2,
-        md_profile={},
+        md_profile_text="",
         hooks=hooks,
         history=[],
         avoid_topic_refs=["topic_a", "topic_b"],
@@ -271,7 +397,7 @@ async def test_avoid_topic_refs_render_redispatch_block(
         speaker_user_id=user_a.id,
         turn_number=1,
         max_turns=2,
-        md_profile={},
+        md_profile_text="",
         hooks=hooks,
         history=[],
         avoid_topic_refs=[],
@@ -312,10 +438,79 @@ async def test_two_consecutive_wraps_finish_naturally(
     ]
     monkeypatch.setattr("src.agent_chat.engine.llm_chat", AsyncMock(side_effect=responses))
 
-    chat = await run_agent_chat(db_session, match=match, max_turns=4)
+    chat = await run_agent_chat(
+        db_session,
+        match=match,
+        max_turns=4,
+        min_turns_before_wrap=0,
+    )
 
     assert chat.status == "done_natural"
     assert chat.end_reason == "natural_wrap"
+
+
+async def test_early_wraps_do_not_finish_before_min_turns(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, _, _ = await _create_match_bundle(db_session)
+    responses = [FakeLLMResp(_llm_payload("wrap")) for _ in range(6)]
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", AsyncMock(side_effect=responses))
+
+    chat = await run_agent_chat(
+        db_session,
+        match=match,
+        max_turns=6,
+        min_turns_before_wrap=8,
+    )
+    messages = (await db_session.execute(
+        select(AgentChatMessage).where(AgentChatMessage.agent_chat_id == chat.id)
+    )).scalars().all()
+
+    assert chat.status == "done_natural"
+    assert chat.end_reason == "turn_limit"
+    assert len(messages) == 6
+
+
+async def test_non_dict_signals_do_not_crash_chat(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, _, _ = await _create_match_bundle(db_session)
+    payload = json.loads(_llm_payload())
+    payload["public_signals"] = "bad public"
+    payload["private_signals"] = "bad private"
+    monkeypatch.setattr(
+        "src.agent_chat.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(json.dumps(payload, ensure_ascii=False))),
+    )
+
+    chat = await run_agent_chat(db_session, match=match, max_turns=1)
+    messages = (
+        await db_session.execute(
+            select(AgentChatMessage).where(AgentChatMessage.agent_chat_id == chat.id)
+        )
+    ).scalars().all()
+
+    assert chat.status == "done_natural"
+    assert messages[0].public_signals == {}
+    assert messages[0].private_signals == {}
+
+
+async def test_non_object_json_response_becomes_parse_error(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, _, _ = await _create_match_bundle(db_session)
+    monkeypatch.setattr(
+        "src.agent_chat.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(json.dumps("not an object"))),
+    )
+
+    chat = await run_agent_chat(db_session, match=match, max_turns=1)
+
+    assert chat.status == "done_terminated"
+    assert chat.end_reason == "parse_error"
 
 
 async def test_no_hooks_terminates_chat_without_llm(

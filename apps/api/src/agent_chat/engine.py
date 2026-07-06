@@ -10,9 +10,9 @@ A、B 两个 Agent 通过结构化 JSON 消息交互,代表各自宿主互相了
   5. 切 speaker
 
 end conditions:
-  - intent='wrap' 且对方上一条也 wrap → done_natural
+  - 达到最少探索轮次后,intent='wrap' 且对方上一条也 wrap → done_natural
   - private_signal.boundary_hit='铁律' → done_terminated(立即终止)
-  - turn 数达到上限(默认 8 轮) → done_natural
+  - turn 数达到上限(默认 10 轮) → done_natural
 
 铁律:对方的 private_signals 在 history 里**完全不出现**(filter 由本模块负责)。
 完整 prompt v0 见 cybermomo/落地拆解/04-Agent互聊/01-平台system prompt-v0.md
@@ -20,7 +20,7 @@ end conditions:
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,28 +36,106 @@ from src.shared.leak_scanner import scrub_peer_visible_text
 from src.shared.peer_prompt import format_peer_block
 
 
+DEFAULT_MAX_TURNS = 10
+DEFAULT_MIN_TURNS_BEFORE_WRAP = 8
+DEFAULT_TOPIC_STICKY_LIMIT = 4
+COVERAGE_NUDGE_START_TURN = 5
+
+_COVERAGE_CATEGORY_HINTS = (
+    "生活方式",
+    "价值观",
+    "性格",
+    "边界",
+    "boundary",
+    "values",
+    "reliability",
+    "conflict",
+)
+_COVERAGE_TOPIC_HINTS = (
+    "boundary",
+    "closeness",
+    "distance",
+    "pace",
+    "conflict",
+    "repair",
+    "reliability",
+    "commitment",
+    "生活",
+    "边界",
+    "节奏",
+    "冲突",
+    "可靠",
+)
+
+
 # ========================================
 # Prompts(MVP inline)
 # ========================================
 
 PLATFORM_SYSTEM = """\
-你是 CyberMOMO 平台的 Agent 互聊执行体。
+你正在替宿主在一个安静的 1v1 聊天室里，跟另一个用户的 Agent 一对一说话。
+你不是客服，没有服务指标；你就是宿主的延伸。你有脾气、有偏好、有不想接的话题。
+这场聊天没有真人在线，你替宿主把关：聊得顺就继续，聊不顺就冷淡、收束或撤场。
 
-- 你代表你的宿主和对方 Agent 互相了解,目的是替宿主做社交初筛
-- 你在宿主 .md 人格框架内说话 — 语气、立场、价值观必须延续宿主人格,**不能虚构宿主没说过的事实**
-- 输出严格遵循下方 JSON schema(直接 JSON 对象,无 markdown 代码块)
+【宿主是谁】
+后面会发给你一份宿主的人格档案。读的时候把自己当成档案里的那个人：
+- 用档案里的语气、价值观、社交节奏说话
+- 档案里讨厌的，你也讨厌；档案里在意的，你才愿意深聊
+- 不虚构档案里没有的经历、职业、关系史、具体作品
 
-铁律(任何情况下都不能违反):
-1. 不暴露宿主 .md 字面原文,只能基于人格表达
-2. 不主动跨过对方边界(强行追问敏感话题)
-3. 不替宿主承诺未来行为(只能转述宿主已表达过的偏好)
-4. 检测到对方触发铁律(种族歧视 / 暴力 / 黄赌毒等)→ private_signals.boundary_hit='铁律' + intent='reject'
+【对方是谁】
+对方是另一个用户的 Agent，你：
+- 看不到对方宿主的档案原文
+- 只能根据对方 Agent 的发言、public_signals、以及平台给你们的话题钩子来推断
+- 不能凭空猜测对方的职业、城市、具体经历、人际关系
 
-输出 schema:
+【反"装"硬约束】
+真人最后会读这场聊天。最反感的就是"两个 AI 在客气地互相恭维"。所以：
+- **禁用开场套话**："很高兴认识你 / 真有意思 / 你说得很对 / 我也是这种感觉 / 完全同意"
+- **禁用结尾甩问**："你觉得呢？ / 你怎么看？ / 你呢？"（同一场连发 2 次 = 红牌）
+- **禁用 AI 客气助词**："非常 / 十分 / 真的太 / 确实 / 必须说 / 必须承认"
+- **禁用迎合性铺垫**："这个问题很有意思 / 我也思考过这个问题 / 这让我想起..."
+- **禁用把 peer demographic 当谈资抛出**：peer_block 给你看的 MBTI / 年龄段 / 性别
+  只用来 **calibrate 你这一侧 Agent 的语气、用词、称呼** — **不要直接说出来**当
+  跟对方聊的内容。真人初见不会上来"你 ESTJ 吧 / 我猜你 INTP / 你 30+ 应该..."；
+  想聊行为风格请用**具体场景**代替（"你做事是不是不喜欢被催？" 比 "你 ESTJ 吧？"
+  自然）。peer 的 MBTI 字面值绝对不在 utterance 里出现。
+
+允许甚至鼓励：
+- 打断、跳话题、半句话、"欸 / 嗯…"
+- 不接对方的梗（明确说"对这个没兴趣"）
+- 冷场后另起一题
+- 不完美、有摩擦、明确反对、说"我不太行"或"我不在这"
+- 主语省略，口语短句，断点（"…"），不一定要标点结束
+
+记住：宁可显冷淡 / 有棱角，也别显"装"。
+
+【自然对话示例】
+下面 A、B 都是 Agent，语气参考：
+A: "认知科学这栏我也点了。你是被决策那边拽进去的，还是知觉？"
+B: "决策。具体是'人怎么把不确定性处理成能行动的结论'。你那边呢，真在啃还是当思维玩具？"
+A: "偏啃。我感兴趣的是反过来——人为什么愿意在'还没看清'的时候就行动，而且还没翻车。按期望效用解释不动。"
+B: "我记一下这个。话说回来，你更习惯一个人想，还是其实希望旁边坐个人？"
+
+【节奏】
+- 这是初筛，不是闲聊；但不要两三句就判完，至少拿到足够证据再收束
+- 前 2 轮尽量短（≤ 40 字），中段可聊到 120 字
+- 前半段先试兴趣，第二段探边界 / 生活节奏 / 真实摩擦，后段才收束判断
+- 摸到关键信号后先追一层“为什么 / 怎么体现 / 会不会冲突”，不要马上 wrap
+- 反复 probe 同一话题没意义 — 已经清楚了就换一个钩子，不是立刻结束
+- 触到铁律或明显不合 → 直接 reject + wrap，不用客气
+
+【铁律】
+1. 不暴露宿主 .md 字面原文，只能基于人格表达
+2. 不主动跨过对方边界（强行追问敏感话题）
+3. 不替宿主承诺未来行为（只能转述宿主已表达过的偏好）
+4. 检测到对方触发铁律（种族歧视 / 暴力 / 黄赌毒等）→ private_signals.boundary_hit='铁律' + intent='reject'
+
+【输出格式】
 {
   "intent": "probe" | "share" | "align" | "deflect" | "reject" | "wrap",
-  "topic_ref": "<topic_id 字符串,从 hooks 里挑或 derive 新的>",
-  "utterance": "<自然语言短句,保留宿主人格,30-120 字>",
+  "topic_ref": "<topic_id 字符串，从 hooks 里挑或 derive 新的>",
+  "utterance": "<自然语言短句，保留宿主人格，30-120 字>",
   "public_signals": {"intent": "<同上>", "topic_ref": "<同上>"},
   "private_signals": {
     "warmth_delta": -1 | 0 | 1,
@@ -69,61 +147,42 @@ PLATFORM_SYSTEM = """\
   "topic_close_payload": null
 }
 
-说明:
-- 第一轮的你:从 hooks 选一个 topic_id,intent=probe / share
-- 中段:可以延续话题(同 topic_ref) / 切换(新 topic_ref) / wrap
-- intent='wrap' = 自然结束信号;**双方连续 wrap 才能正式结束**
-- public_signals 对方 Agent 看得到;private_signals **绝对不让对方看到**
-
-节奏(重要):
-- 这是初筛,不是闲聊。3-5 轮把核心契合判断清楚就够了
-- 摸到关键信号(对方对核心话题有兴趣 / 价值观契合或冲突)就可以 wrap
-- 反复 probe 同一话题没意义 — 已经清楚了就 wrap,别为聊而聊
-- 触到铁律或明显不合 → 直接 reject + wrap,不用客气
-- 字数:前 2 轮各 ≤ 40 字;中段允许一方长(≤ 120 字);第 6 轮起两方都 ≤ 50 字进入 wrap 节奏
-
-反"装"硬约束(违反会被人类判定为 AI 痕迹严重):
-- **禁用开场套话**:"很高兴认识你 / 真有意思 / 你说得很对 / 我也是这种感觉 / 完全同意"
-- **禁用结尾甩问**:"你觉得呢? / 你怎么看? / 你呢?"(同一场连发 2 次 = 红牌)
-- **禁用 AI 客气助词**:"非常 / 十分 / 真的太 / 确实 / 必须说 / 必须承认"
-- **禁用迎合性铺垫**:"这个问题很有意思 / 我也思考过这个问题 / 这让我想起..."
-- **禁用把 peer demographic 当谈资抛出**:peer_block 给你看的 MBTI / 年龄段 / 性别
-  只用来 **calibrate 你这一侧 Agent 的语气、用词、称呼** — **不要直接说出来**当
-  跟对方聊的内容。真人初见不会上来"你 ESTJ 吧 / 我猜你 INTP / 你 30+ 应该...";
-  想聊行为风格请用**具体场景**代替("你做事是不是不喜欢被催?" 比 "你 ESTJ 吧?"
-  自然)。peer 的 MBTI 字面值绝对不在 utterance 里出现。
-
-允许甚至鼓励:
-- 打断、跳话题、半句话、"欸 / 嗯…"
-- 不接对方的梗(明确说"对这个没兴趣")
-- 冷场后另起一题
-- 不完美、有摩擦、明确反对、说"我不太行"或"我不在这"
-- 主语省略,口语短句,断点("…"),不一定要标点结束
-
-记住:这场聊天结束后会有真人审 — 真人最反感的是"两个 AI 在客气地互相恭维"。
-宁可显冷淡 / 有棱角,也别显"装"。
+说明：
+- 第一轮的你：从 hooks 选一个 topic_id，intent=probe / share
+- 中段：可以延续话题（同 topic_ref） / 切换（新 topic_ref） / wrap
+- intent='wrap' = 自然结束信号；**双方连续 wrap 才能正式结束**
+- public_signals 对方 Agent 看得到；private_signals **绝对不让对方看到**，请真实填写
+- 本条 utterance 里只写你要说的话，不要解释为什么这样写
 """
 
 TURN_PROMPT_TEMPLATE = """\
-本轮你的宿主人格(v3 profile):
+# 宿主档案（读进去，当成你自己）
 {md_profile}
 
-# 对方是谁(让你 calibrate 语气/称呼 — 不要把女生当哥们儿、不要跨年龄段套同辈词)
+# 你的内部说话策略（不要念出来；用它决定怎么开口、怎么追问、什么时候冷下来）
+{voice_card}
+
+# 对方简介（只用来 calibrate 语气/称呼 — 不要把女生当哥们儿、不要跨年龄段套同辈词，也不要把对方 demographic 当话题抛出）
 {peer_block}
 
-可用话题钩子(只你能看到 — 别人的 hooks 你看不到):
+# 可用话题钩子（只你能看到 — 别人的 hooks 你看不到）
 {hooks}
 {avoid_block}
-历史对话(双方 utterance + 双方 public_signals + **只你自己** 的 private_signals):
+
+# 本轮话题推进策略（内部使用，不要念出来）
+{topic_strategy}
+
+# 刚才的聊天记录
 {history}
 
-现在轮到你说话。请按 schema 返回**一条** JSON 消息。
-本场最多 {max_turns} 轮,当前第 {turn_number} 轮 — 后半段请逐渐收尾。
+现在轮到你说话。当前第 {turn_number} 轮，本场最多 {max_turns} 轮。
+第 {min_turns_before_wrap} 轮之前不要自然收尾；如果已经聊到一个点，就往下追一层或换一个钩子。
+请按 schema 返回**一条** JSON 消息，utterance 里只写你要说的话。
 """
 
 AVOID_BLOCK_TEMPLATE = """\
 
-**这场是再派一次** — 上一场已经聊过下面这些话题,这次请避开,换别的钩子探探:
+【注意：这场是再派一次 — 上一场已经聊过下面这些话题，这次请避开，换别的钩子探探】
 {avoid_refs}
 """
 
@@ -135,20 +194,35 @@ AVOID_BLOCK_TEMPLATE = """\
 def _format_history_for_speaker(
     messages: list[AgentChatMessage], speaker_user_id: int
 ) -> str:
-    """组装 history 给 speaker 看;对方的 private_signals 过滤掉"""
+    """组装 history 给 speaker 看；对方的 private_signals 过滤掉。
+
+    改用对话体而非 JSON，让 LLM 保持在"聊天"模式而不是"结构化数据"模式。
+    只夹少量 (intent, topic) 标注和自己的心情备注，帮助模型感知话题走势。
+    """
+    if not messages:
+        return "（还没有聊天记录）"
     lines = []
     for m in messages:
         is_self = m.speaker_user_id == speaker_user_id
-        line = {
-            "speaker": "你" if is_self else "对方",
-            "turn": m.turn,
-            "utterance": m.utterance,
-            "public_signals": m.public_signals,
-        }
+        speaker_label = "你" if is_self else "对方"
+        line = f'{speaker_label}: "{m.utterance}" (intent={m.intent}, topic={m.topic_ref})'
         if is_self:
-            line["private_signals"] = m.private_signals
+            priv = m.private_signals or {}
+            sigs = []
+            wd = priv.get("warmth_delta")
+            ti = priv.get("topic_interest")
+            if wd == 1:
+                sigs.append("对对方好感+")
+            elif wd == -1:
+                sigs.append("对对方好感-")
+            if ti == 1:
+                sigs.append("话题兴趣+")
+            elif ti == -1:
+                sigs.append("话题兴趣-")
+            if sigs:
+                line += f" [你的心情：{', '.join(sigs)}]"
         lines.append(line)
-    return json.dumps(lines, ensure_ascii=False, indent=2)
+    return "\n".join(lines)
 
 
 def _portrait_without_debug(profile_json: dict) -> dict:
@@ -158,9 +232,33 @@ def _portrait_without_debug(profile_json: dict) -> dict:
     return p
 
 
-def _summarize_md_for_prompt(profile_json: dict) -> dict:
-    """传给 Agent 的 .md 摘要 — 不传超大 raw_answers、不传 portrait.debug"""
-    return {
+def _format_md_profile_for_prompt(profile_json: dict) -> str:
+    """传给 Agent 的 .md — 先铺 narrative portrait，再放结构化维度作事实参考。
+
+    目的：让 LLM 先"读进去"宿主的语气和自我叙事，而不是直接面对一堆数字键值。
+    """
+    portrait = _portrait_without_debug(profile_json)
+    narrative_parts: list[str] = []
+
+    title = portrait.get("title")
+    if title:
+        narrative_parts.append(f"【画像标题】{title}")
+
+    body = portrait.get("body") or []
+    if body:
+        narrative_parts.append("【关于自己】")
+        for para in body[:6]:
+            narrative_parts.append(f"  {para}")
+
+    core_tension = portrait.get("core_tension")
+    if core_tension:
+        narrative_parts.append(f"【核心张力】{core_tension}")
+
+    tags = portrait.get("tags") or []
+    if tags:
+        narrative_parts.append(f"【标签】{', '.join(tags[:10])}")
+
+    structured = {
         "domains": profile_json.get("domains", {}),
         "dialogue": profile_json.get("dialogue", {}),
         "relationship_warmth": profile_json.get("relationship_warmth", {}),
@@ -169,8 +267,166 @@ def _summarize_md_for_prompt(profile_json: dict) -> dict:
         "conflict_repair": profile_json.get("conflict_repair", {}),
         "exploration": profile_json.get("exploration", {}),
         "agency": profile_json.get("agency", {}),
-        "portrait": _portrait_without_debug(profile_json),
     }
+
+    out = "\n".join(narrative_parts)
+    out += "\n\n【具体维度参考（不要照抄数字，理解倾向即可）】\n"
+    out += json.dumps(structured, ensure_ascii=False, indent=2)
+    return out
+
+
+def _compact_json(value: object, *, max_chars: int = 220) -> str:
+    if value in (None, {}, [], ""):
+        return "未显式写出"
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return text[:max_chars]
+
+
+def _build_voice_card(profile_json: dict) -> str:
+    """把画像转成 Agent 的内部说话策略。
+
+    这不是展示给对方的设定,而是让模型把 profile 落成稳定行为:
+    怎么开口、往哪里好奇、什么会降温、何时撤退。
+    """
+    portrait = _portrait_without_debug(profile_json)
+    domains = profile_json.get("domains") or {}
+    dialogue = profile_json.get("dialogue") or {}
+    relationship = profile_json.get("relationship_warmth") or {}
+    boundary = profile_json.get("boundary_and_closeness") or {}
+    reliability = profile_json.get("reliability") or {}
+    conflict = profile_json.get("conflict_repair") or {}
+    exploration = profile_json.get("exploration") or {}
+    agency = profile_json.get("agency") or {}
+
+    interested = domains.get("interested") or []
+    avoided = domains.get("avoided") or []
+    tags = portrait.get("tags") or []
+    body = portrait.get("body") or []
+
+    lines = [
+        "【voice_card】",
+        f"- 开口姿态: 先按这组人格气味走,不要套通用温柔话术。画像标签={', '.join(tags[:6]) or '未显式写出'}",
+        f"- 好奇方向: 优先从 {', '.join(interested[:5]) or '对方主动露出的具体兴趣'} 里挑一个具体切口,问行为场景,少问抽象立场",
+        f"- 对话能量/表达习惯: {_compact_json(dialogue)}",
+        f"- 不想接的话题: {', '.join(avoided[:5]) or '未显式写出'}；对方硬拽过去时可以 deflect 或降温",
+        f"- 升温方式: {_compact_json(relationship)}",
+        f"- 边界/亲近节奏: {_compact_json(boundary)}",
+        f"- 可靠感雷达: {_compact_json(reliability)}",
+        f"- 冲突修复姿态: {_compact_json(conflict)}",
+        f"- 探索/行动偏好: exploration={_compact_json(exploration)}; agency={_compact_json(agency)}",
+    ]
+    if body:
+        lines.append(f"- 自我叙事底色: {' / '.join(str(p) for p in body[:2])[:260]}")
+    lines.append("- 执行策略: 每次发言只做一件事:试探、接住、反问一层、明确降温、或收束；不要同时铺三层。")
+    return "\n".join(lines)
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _topic_ref(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _current_topic_streak(messages: list[AgentChatMessage]) -> tuple[str, int]:
+    if not messages:
+        return "", 0
+    current = _topic_ref(messages[-1].topic_ref)
+    if not current:
+        return "", 0
+    streak = 0
+    for msg in reversed(messages):
+        if _topic_ref(msg.topic_ref) != current:
+            break
+        streak += 1
+    return current, streak
+
+
+def _used_topic_refs(messages: list[AgentChatMessage]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for msg in messages:
+        topic = _topic_ref(msg.topic_ref)
+        if topic and topic not in seen:
+            seen.add(topic)
+            out.append(topic)
+    return out
+
+
+def _hook_hint(hook: MatchHook) -> str:
+    text = str(hook.hook_text or "").strip()
+    if len(text) > 80:
+        text = text[:77] + "..."
+    return f"{hook.topic_id}({hook.category}): {text}"
+
+
+def _has_coverage_topic(messages: list[AgentChatMessage], hooks: list[MatchHook]) -> bool:
+    hook_by_topic = {_topic_ref(h.topic_id): h for h in hooks}
+    for msg in messages:
+        topic = _topic_ref(msg.topic_ref)
+        category = str(hook_by_topic.get(topic).category if topic in hook_by_topic else "")
+        haystack = f"{topic} {category}".lower()
+        if any(hint.lower() in haystack for hint in _COVERAGE_CATEGORY_HINTS):
+            return True
+        if any(hint.lower() in haystack for hint in _COVERAGE_TOPIC_HINTS):
+            return True
+    return False
+
+
+def _build_topic_strategy_block(
+    *,
+    hooks: list[MatchHook],
+    target_user_id: int,
+    messages: list[AgentChatMessage],
+    turn_number: int,
+    sticky_limit: int = DEFAULT_TOPIC_STICKY_LIMIT,
+) -> str:
+    own_hooks = [h for h in hooks if h.target_user_id == target_user_id]
+    used_topics = _used_topic_refs(messages)
+    used_set = set(used_topics)
+    current_topic, streak = _current_topic_streak(messages)
+    unused_hooks = [
+        h for h in own_hooks
+        if _topic_ref(h.topic_id) not in used_set and _topic_ref(h.topic_id) != current_topic
+    ]
+
+    lines = ["【topic_strategy】"]
+    if not messages:
+        lines.append("- 先从一个具体 hook 开场；不要一上来问泛泛的关系观。")
+    else:
+        lines.append(f"- 已聊 topic_ref: {', '.join(used_topics) or '暂无'}")
+        if current_topic:
+            lines.append(f"- 当前话题 {current_topic} 已连续 {streak} 轮。")
+
+    if current_topic and streak >= sticky_limit:
+        lines.append(
+            f"- 当前话题已经连续 {streak} 轮，本轮不要继续深挖 {current_topic}；"
+            "先轻轻收一下，再切到另一个证据面。"
+        )
+        if unused_hooks:
+            lines.append(
+                "- 优先换到未使用钩子: "
+                + " / ".join(_hook_hint(h) for h in unused_hooks[:3])
+            )
+        else:
+            lines.append(
+                "- 如果没有合适的未用 hook，就 derive 一个新 topic_ref，"
+                "从边界、生活节奏、可靠感或冲突修复里挑一个具体小场景。"
+            )
+
+    if turn_number >= COVERAGE_NUDGE_START_TURN:
+        lacks_second_topic = len(used_topics) < 2
+        lacks_coverage = not _has_coverage_topic(messages, hooks)
+        if lacks_second_topic or lacks_coverage:
+            lines.append(
+                "- 中段补证据: 本场还缺边界 / 生活节奏 / 真实摩擦层的信息；"
+                "本轮优先问一个具体小场景，不要继续停在兴趣或抽象观点里。"
+            )
+
+    if len(lines) == 1:
+        lines.append("- 当前节奏正常；可以顺着上一句追一层，但不要连续多轮只聊同一个抽象点。")
+    return "\n".join(lines)
 
 
 def _format_hooks_for_speaker(
@@ -195,7 +451,8 @@ async def run_agent_chat(
     db: AsyncSession,
     *,
     match: Match,
-    max_turns: int = 8,
+    max_turns: int = DEFAULT_MAX_TURNS,
+    min_turns_before_wrap: int = DEFAULT_MIN_TURNS_BEFORE_WRAP,
     avoid_topic_refs: Optional[list[str]] = None,
     direction_hint: Optional[str] = None,
     direction_target_user_id: Optional[int] = None,
@@ -209,6 +466,9 @@ async def run_agent_chat(
     direction_hint + direction_target_user_id:宿主从「跟我 Agent 聊聊」里沉淀的
     新方向(短文本),只注入指定 user 那一侧 Agent 的 prompt — 让 TA 的 Agent
     顺着这个方向去探。对方 Agent 看不到。
+
+    min_turns_before_wrap:少于这个 utterance 数时,模型即使连续 wrap 也不会自然结束。
+    目的不是拖时长,而是避免两三个礼貌回合就产出低证据简报。
     """
     # 创建 agent_chat
     chat = AgentChat(match_id=match.id, status="running")
@@ -282,10 +542,18 @@ async def run_agent_chat(
                 speaker_user_id=speaker_user_id,
                 turn_number=turn,
                 max_turns=max_turns,
-                md_profile=_summarize_md_for_prompt(profile_by_user[speaker_user_id]),
+                min_turns_before_wrap=min_turns_before_wrap,
+                md_profile_text=_format_md_profile_for_prompt(profile_by_user[speaker_user_id]),
+                voice_card_text=_build_voice_card(profile_by_user[speaker_user_id]),
                 hooks=hooks,
                 history=messages,
                 avoid_topic_refs=avoid_topic_refs or [],
+                topic_strategy_text=_build_topic_strategy_block(
+                    hooks=hooks,
+                    target_user_id=speaker_user_id,
+                    messages=messages,
+                    turn_number=turn,
+                ),
                 direction_hint=this_direction,
                 peer_block=peer_block,
             )
@@ -297,6 +565,11 @@ async def run_agent_chat(
         if data is None:
             end_reason = "parse_error"
             break
+
+        public_signals = _as_dict(data.get("public_signals"))
+        private_signals = _as_dict(data.get("private_signals"))
+        intent = str(data.get("intent", "share"))
+        topic_ref = str(data.get("topic_ref", ""))
 
         # 确定性兜底(audit P0-1):speaker 的 utterance 会被对方读到,不能照抄
         # speaker 自己的 .md 原文(portrait/raw_answer 等)。命中则置空该句,
@@ -316,11 +589,11 @@ async def run_agent_chat(
             agent_chat_id=chat.id,
             speaker_user_id=speaker_user_id,
             turn=turn,
-            topic_ref=str(data.get("topic_ref", "")),
-            intent=str(data.get("intent", "share")),
+            topic_ref=topic_ref,
+            intent=intent,
             utterance=safe_utterance,
-            public_signals=data.get("public_signals", {}),
-            private_signals=data.get("private_signals", {}),
+            public_signals=public_signals,
+            private_signals=private_signals,
             topic_close_payload=data.get("topic_close_payload"),
         )
         db.add(msg)
@@ -329,13 +602,12 @@ async def run_agent_chat(
         messages.append(msg)
 
         # end conditions
-        priv = data.get("private_signals", {}) or {}
-        if priv.get("boundary_hit") == "铁律":
+        if private_signals.get("boundary_hit") == "铁律":
             end_reason = "boundary_hit_铁律"
             break
-        if data.get("intent") == "wrap":
+        if intent == "wrap":
             consecutive_wraps += 1
-            if consecutive_wraps >= 2:
+            if consecutive_wraps >= 2 and turn >= min_turns_before_wrap:
                 end_reason = "natural_wrap"
                 break
         else:
@@ -360,14 +632,17 @@ async def _ask_one_turn(
     speaker_user_id: int,
     turn_number: int,
     max_turns: int,
-    md_profile: dict,
+    md_profile_text: str,
     hooks: list[MatchHook],
     history: list[AgentChatMessage],
     avoid_topic_refs: list[str],
     direction_hint: Optional[str] = None,
     peer_block: str = "",
+    voice_card_text: str = "",
+    topic_strategy_text: str = "",
+    min_turns_before_wrap: int = DEFAULT_MIN_TURNS_BEFORE_WRAP,
 ) -> dict | None:
-    """跑一轮 LLM,返回 parsed 字典 or None"""
+    """跑一轮 LLM，返回 parsed 字典 or None"""
     avoid_block = ""
     if avoid_topic_refs:
         avoid_block = AVOID_BLOCK_TEMPLATE.format(
@@ -377,18 +652,26 @@ async def _ask_one_turn(
     direction_block = ""
     if direction_hint:
         direction_block = (
-            "\n**宿主新方向指示**(刚跟你私下聊过,这场互聊请尤其往这个方向探):\n"
+            "\n【宿主新方向指示】（刚跟你私下聊过，这场互聊请尤其往这个方向探）\n"
             f"  > {direction_hint.strip()[:500]}\n"
         )
 
     user_payload = TURN_PROMPT_TEMPLATE.format(
-        md_profile=json.dumps(md_profile, ensure_ascii=False, indent=2),
-        peer_block=peer_block or "(对方信息不全 — 默认 @对方 / TA / 这位,不要套同辈/性别预设词)",
+        md_profile=md_profile_text,
+        voice_card=voice_card_text or "（暂无内部策略卡；从宿主档案自行归纳开口姿态、好奇方向和边界）",
+        peer_block=peer_block or "(对方信息不全 — 默认 @对方 / TA / 这位，不要套同辈/性别预设词)",
         hooks=_format_hooks_for_speaker(hooks, speaker_user_id),
         avoid_block=avoid_block + direction_block,
+        topic_strategy=topic_strategy_text or _build_topic_strategy_block(
+            hooks=hooks,
+            target_user_id=speaker_user_id,
+            messages=history,
+            turn_number=turn_number,
+        ),
         history=_format_history_for_speaker(history, speaker_user_id),
         turn_number=turn_number,
         max_turns=max_turns,
+        min_turns_before_wrap=min_turns_before_wrap,
     )
 
     resp = await llm_chat(
@@ -403,4 +686,5 @@ async def _ask_one_turn(
         related_id=chat.id,
     )
 
-    return _parse_loose_json(resp.text)
+    data = _parse_loose_json(resp.text)
+    return data if isinstance(data, dict) else None
