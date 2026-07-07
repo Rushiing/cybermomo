@@ -66,6 +66,22 @@ _COVERAGE_TOPIC_HINTS = (
     "冲突",
     "可靠",
 )
+_QUESTION_HINTS = (
+    "?",
+    "？",
+    "吗",
+    "么",
+    "怎么",
+    "怎样",
+    "为什么",
+    "会不会",
+    "是不是",
+    "能不能",
+    "要不要",
+    "哪",
+    "什么",
+)
+_COOL_DOWN_INTENTS = {"deflect", "reject", "wrap"}
 
 
 # ========================================
@@ -374,6 +390,57 @@ def _has_coverage_topic(messages: list[AgentChatMessage], hooks: list[MatchHook]
     return False
 
 
+def _looks_like_question(text: str) -> bool:
+    return any(hint in text for hint in _QUESTION_HINTS)
+
+
+def _positive_private_signal(message: AgentChatMessage) -> bool:
+    private = message.private_signals or {}
+    return private.get("warmth_delta") == 1 or private.get("topic_interest") == 1
+
+
+def _has_bidirectional_spark_candidate(
+    messages: list[AgentChatMessage],
+    current_topic: str,
+    streak: int,
+    *,
+    sticky_limit: int = DEFAULT_TOPIC_STICKY_LIMIT,
+) -> bool:
+    if not current_topic or streak < sticky_limit:
+        return False
+
+    topic_messages: list[AgentChatMessage] = []
+    for msg in reversed(messages):
+        if _topic_ref(msg.topic_ref) != current_topic:
+            break
+        topic_messages.append(msg)
+    topic_messages.reverse()
+
+    counts: dict[int, int] = {}
+    meaningful: set[int] = set()
+    question_speakers: set[int] = set()
+    positive_signals = 0
+    for msg in topic_messages:
+        speaker = msg.speaker_user_id
+        counts[speaker] = counts.get(speaker, 0) + 1
+        utterance = str(msg.utterance or "").strip()
+        if len(utterance) >= 24:
+            meaningful.add(speaker)
+        if _looks_like_question(utterance):
+            question_speakers.add(speaker)
+        if _positive_private_signal(msg):
+            positive_signals += 1
+
+    if len(counts) < 2 or any(count < 2 for count in counts.values()):
+        return False
+    if len(meaningful) < 2:
+        return False
+    if any(str(msg.intent or "") in _COOL_DOWN_INTENTS for msg in topic_messages[-2:]):
+        return False
+
+    return len(question_speakers) >= 1 or positive_signals >= 2
+
+
 def _build_topic_strategy_block(
     *,
     hooks: list[MatchHook],
@@ -386,6 +453,12 @@ def _build_topic_strategy_block(
     used_topics = _used_topic_refs(messages)
     used_set = set(used_topics)
     current_topic, streak = _current_topic_streak(messages)
+    has_spark_candidate = _has_bidirectional_spark_candidate(
+        messages,
+        current_topic,
+        streak,
+        sticky_limit=sticky_limit,
+    )
     unused_hooks = [
         h for h in own_hooks
         if _topic_ref(h.topic_id) not in used_set and _topic_ref(h.topic_id) != current_topic
@@ -399,7 +472,16 @@ def _build_topic_strategy_block(
         if current_topic:
             lines.append(f"- 当前话题 {current_topic} 已连续 {streak} 轮。")
 
-    if current_topic and streak >= sticky_limit:
+    if has_spark_candidate:
+        lines.append(
+            f"- 升温验证: {current_topic} 已被双方连续接住，不要立刻换题。"
+            "本轮做一次“来电验证”: 把话题落到真实相处、边界、节奏或冲突修复里的一个具体场景。"
+        )
+        lines.append(
+            "- 不要泛泛夸对方、不要直接判“来电”。如果你自己确实被某个具体点打动，"
+            "可以短短承认这个点，再问一个会暴露真实选择成本的问题。"
+        )
+    elif current_topic and streak >= sticky_limit:
         lines.append(
             f"- 当前话题已经连续 {streak} 轮，本轮不要继续深挖 {current_topic}；"
             "先轻轻收一下，再切到另一个证据面。"
@@ -419,10 +501,16 @@ def _build_topic_strategy_block(
         lacks_second_topic = len(used_topics) < 2
         lacks_coverage = not _has_coverage_topic(messages, hooks)
         if lacks_second_topic or lacks_coverage:
-            lines.append(
-                "- 中段补证据: 本场还缺边界 / 生活节奏 / 真实摩擦层的信息；"
-                "本轮优先问一个具体小场景，不要继续停在兴趣或抽象观点里。"
-            )
+            if has_spark_candidate:
+                lines.append(
+                    "- 中段补证据: 顺着当前升温点补边界 / 生活节奏 / 真实摩擦信息；"
+                    "不要只停在兴趣共鸣里。"
+                )
+            else:
+                lines.append(
+                    "- 中段补证据: 本场还缺边界 / 生活节奏 / 真实摩擦层的信息；"
+                    "本轮优先问一个具体小场景，不要继续停在兴趣或抽象观点里。"
+                )
 
     if len(lines) == 1:
         lines.append("- 当前节奏正常；可以顺着上一句追一层，但不要连续多轮只聊同一个抽象点。")

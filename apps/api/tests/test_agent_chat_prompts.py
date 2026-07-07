@@ -285,6 +285,77 @@ async def test_topic_strategy_nudges_after_sticky_topic(
     assert "topic_boundary" in prompt
 
 
+async def test_topic_strategy_runs_spark_validation_on_bidirectional_push(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, user_b = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload(topic_ref="topic_a"))
+
+    history = [
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=1,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="你是会把不确定先拆开，还是先凭直觉往前试一步？",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=2,
+            topic_ref="topic_a",
+            intent="share",
+            utterance="我会先试一步，但会给自己留一个能撤回的台阶，不喜欢纯冲动。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=3,
+            topic_ref="topic_a",
+            intent="share",
+            utterance="这点我能接住。我也不怕试错，但很在意旁边的人能不能一起复盘。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=4,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="那如果复盘时发现你判断错了，你更希望对方直接指出，还是先缓一下？",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+    ]
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_a.id,
+        turn_number=5,
+        max_turns=10,
+        md_profile_text="profile text",
+        hooks=(await db_session.execute(select(MatchHook))).scalars().all(),
+        history=history,
+        avoid_topic_refs=[],
+    )
+
+    prompt = captured_prompts[0]
+    assert "升温验证" in prompt
+    assert "来电验证" in prompt
+    assert "不要立刻换题" in prompt
+    assert "真实相处、边界、节奏或冲突修复" in prompt
+    assert "不要继续深挖 topic_a" not in prompt
+
+
 async def test_topic_strategy_nudges_mid_chat_coverage(
     db_session: AsyncSession,
     monkeypatch,
