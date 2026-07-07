@@ -492,8 +492,12 @@ def _build_topic_strategy_block(
             "本轮做一次“来电验证”: 把话题落到真实相处、边界、节奏或冲突修复里的一个具体场景。"
         )
         lines.append(
-            "- 不要泛泛夸对方、不要直接判“来电”。如果你自己确实被某个具体点打动，"
-            "可以短短承认这个点，再问一个会暴露真实选择成本的问题。"
+            "- 本轮不要继续纯 probe。先接住对方刚才的一个具体选择，再补一个自己的相似/差异细节，"
+            "最后问一个会暴露真实选择成本的问题；intent 优先用 align/share。"
+        )
+        lines.append(
+            "- 不要泛泛夸对方、不要直接判“来电”。要让宿主从原文里看见:"
+            "我接得住你的 X，但我的边界/习惯在 Y。"
         )
     elif current_topic and streak >= sticky_limit:
         lines.append(

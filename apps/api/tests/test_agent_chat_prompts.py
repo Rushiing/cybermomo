@@ -353,6 +353,9 @@ async def test_topic_strategy_runs_spark_validation_on_bidirectional_push(
     assert "来电验证" in prompt
     assert "不要立刻换题" in prompt
     assert "真实相处、边界、节奏或冲突修复" in prompt
+    assert "不要继续纯 probe" in prompt
+    assert "intent 优先用 align/share" in prompt
+    assert "我接得住你的 X" in prompt
     assert "不要继续深挖 topic_a" not in prompt
 
 
