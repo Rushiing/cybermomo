@@ -313,6 +313,26 @@ async def test_invalid_recommended_action_falls_back_to_redispatch(
     assert {s.recommended_action for s in rows} == {"再派一次"}
 
 
+async def test_observe_verdict_cannot_recommend_open_chat(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    chat, _, _ = await _create_summary_bundle(db_session)
+    monkeypatch.setattr(
+        "src.summary.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(_summary_payload(
+            verdict="有点意思再观察",
+            recommended_action="开真人聊天",
+        ))),
+    )
+
+    await run_summary_for_chat(db_session, chat=chat)
+    rows = (await db_session.execute(select(Summary))).scalars().all()
+
+    assert {s.verdict for s in rows} == {"有点意思再观察"}
+    assert {s.recommended_action for s in rows} == {"再派一次"}
+
+
 async def test_peer_block_is_injected_into_summary_system(
     db_session: AsyncSession,
     monkeypatch,

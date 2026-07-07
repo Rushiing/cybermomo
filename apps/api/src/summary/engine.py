@@ -316,6 +316,8 @@ async def run_summary_for_chat(
         recommended = data.get("recommended_action", "再派一次")
         if recommended not in ("开真人聊天", "再派一次", "跟我聊聊调方向"):
             recommended = "再派一次"
+        if verdict != "来电" and recommended == "开真人聊天":
+            recommended = "再派一次"
         if verdict == "来电":
             reason = _laidian_downgrade_reason(
                 chat,
