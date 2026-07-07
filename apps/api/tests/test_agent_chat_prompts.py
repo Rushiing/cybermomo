@@ -359,6 +359,115 @@ async def test_topic_strategy_runs_spark_validation_on_bidirectional_push(
     assert "不要继续深挖 topic_a" not in prompt
 
 
+async def test_topic_strategy_bridges_to_second_confirmation_late_chat(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, user_b = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload(topic_ref="topic_boundary"))
+
+    hooks = (await db_session.execute(select(MatchHook))).scalars().all()
+    hooks.append(
+        MatchHook(
+            match_id=match.id,
+            target_user_id=user_b.id,
+            matchpoint_id=1,
+            topic_id="topic_boundary",
+            category="边界",
+            match_type="互补吸引",
+            hook_text="聊聊冲突后各自需要多久恢复",
+            sensitivity_level=1,
+        )
+    )
+    history = [
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=1,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="你是会把不确定先拆开，还是先凭直觉往前试一步？",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=2,
+            topic_ref="topic_a",
+            intent="share",
+            utterance="我会先试一步，但会给自己留一个能撤回的台阶，不喜欢纯冲动。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=3,
+            topic_ref="topic_a",
+            intent="share",
+            utterance="这点我能接住。我也不怕试错，但很在意旁边的人能不能一起复盘。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=4,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="那如果复盘时发现你判断错了，你更希望对方直接指出，还是先缓一下？",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=5,
+            topic_ref="topic_a",
+            intent="align",
+            utterance="直接指出可以，但最好别当场压着我改口，我会想先把判断链复盘完。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=6,
+            topic_ref="topic_a",
+            intent="align",
+            utterance="我也不太吃当场纠偏。能一起复盘就行，别变成谁输谁赢。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=7,
+            topic_ref="topic_a",
+            intent="share",
+            utterance="对，输赢感一上来我会撤。这个点我觉得你说得挺清楚。",
+            private_signals={"warmth_delta": 1, "topic_interest": 1},
+        ),
+    ]
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_b.id,
+        turn_number=8,
+        max_turns=10,
+        md_profile_text="profile text",
+        hooks=hooks,
+        history=history,
+        avoid_topic_refs=[],
+    )
+
+    prompt = captured_prompts[0]
+    assert "二次确认" in prompt
+    assert "第二个证据面" in prompt
+    assert "验证这种顺是否能换场景成立" in prompt
+    assert "topic_boundary" in prompt
+    assert "不要只靠单一长话题支撑来电" in prompt
+    assert "升温验证" not in prompt
+
+
 async def test_topic_strategy_nudges_mid_chat_coverage(
     db_session: AsyncSession,
     monkeypatch,

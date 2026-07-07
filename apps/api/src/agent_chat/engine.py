@@ -473,6 +473,11 @@ def _build_topic_strategy_block(
         streak,
         sticky_limit=sticky_limit,
     )
+    needs_second_confirmation = (
+        has_spark_candidate
+        and turn_number >= sticky_limit + 4
+        and len(used_topics) < 2
+    )
     unused_hooks = [
         h for h in own_hooks
         if _topic_ref(h.topic_id) not in used_set and _topic_ref(h.topic_id) != current_topic
@@ -486,7 +491,23 @@ def _build_topic_strategy_block(
         if current_topic:
             lines.append(f"- 当前话题 {current_topic} 已连续 {streak} 轮。")
 
-    if has_spark_candidate:
+    if needs_second_confirmation:
+        lines.append(
+            f"- 二次确认: {current_topic} 已经有来电候选证据，本轮不要继续把同一点聊到底。"
+            "先承接上一句，再轻轻桥到第二个证据面，验证这种顺是否能换场景成立。"
+        )
+        if unused_hooks:
+            lines.append(
+                "- 优先桥到未使用钩子: "
+                + " / ".join(_hook_hint(h) for h in unused_hooks[:3])
+            )
+        else:
+            lines.append(
+                "- 没有合适未用 hook 时，derive 一个新 topic_ref；从真实生活节奏、边界、"
+                "可靠感或冲突修复里挑一个具体小场景。"
+            )
+        lines.append("- 语气要像自然换个角度验证，不要宣布“换题”或“二次确认”。")
+    elif has_spark_candidate:
         lines.append(
             f"- 升温验证: {current_topic} 已被双方连续接住，不要立刻换题。"
             "本轮做一次“来电验证”: 把话题落到真实相处、边界、节奏或冲突修复里的一个具体场景。"
@@ -519,7 +540,12 @@ def _build_topic_strategy_block(
         lacks_second_topic = len(used_topics) < 2
         lacks_coverage = not _has_coverage_topic(messages, hooks)
         if lacks_second_topic or lacks_coverage:
-            if has_spark_candidate:
+            if needs_second_confirmation:
+                lines.append(
+                    "- 中段补证据: 用第二个小场景补边界 / 生活节奏 / 真实摩擦信息；"
+                    "不要只靠单一长话题支撑来电。"
+                )
+            elif has_spark_candidate:
                 lines.append(
                     "- 中段补证据: 顺着当前升温点补边界 / 生活节奏 / 真实摩擦信息；"
                     "不要只停在兴趣共鸣里。"

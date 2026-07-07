@@ -149,6 +149,10 @@ def test_summary_system_template_uses_decision_tree_with_bidirectional_and():
     assert "warmth_delta" in prompt
     assert "topic_ref" in prompt
     assert "boundary_hit" in prompt
+    assert "来电\"卡片时要克制" in prompt
+    assert "还没换场景确认" in prompt
+    assert "翻版" in prompt
+    assert "灵魂同频" in prompt
 
     # 反向锁:历史错版字面不能出现
     assert "约 30%" not in prompt
