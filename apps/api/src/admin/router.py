@@ -11,6 +11,7 @@ Admin API · 给外部 cron / 一次性 ops 调用,需要 X-Admin-Secret 头
 - GET  /api/admin/pipeline/incomplete      只读 · 列"有 match 没简报"的 user
 - POST /api/admin/pipeline/repair          按 stage 补跑单 user 半成品 pipeline
 - POST /api/admin/pipeline/repair-all      后台批量补跑所有未完成 user
+- POST /api/admin/summary/redo-user/{uid}  定向重刷某 host 的 summary 卡片
 
 Railway Cron Jobs 配置示例(observation sweep · 每小时):
    curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
@@ -20,11 +21,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.agent_self.backfill import backfill_all
 from src.agent_self.revisit import seed_revisit_after_silent_sweep
+from src.auth.models import User
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
 from src.match.pipeline import (
@@ -44,6 +47,8 @@ from src.seed.operations import (
 )
 from src.shared.db import SessionLocal, get_session
 from src.shared.settings import get_settings
+from src.summary.engine import run_summary_for_chat
+from src.summary.models import Summary
 
 router = APIRouter()
 
@@ -51,6 +56,18 @@ router = APIRouter()
 # 用一个 module flag 防止两次 repair-all 同时扫+补(否则同一 user 被两个后台任务重复补跑,
 # 虽然 pipeline 内部有 pg advisory lock 兜底,但白跑一遍 LLM 浪费配额)。
 _REPAIR_ALL_RUNNING = False
+_SUMMARY_REDO_USER_RUNNING = False
+_SUMMARY_REDO_USER_STATE: dict = {
+    "status": "idle",
+    "user_id": None,
+    "username": None,
+    "target_chat_count": 0,
+    "processed_chat_count": 0,
+    "started_at": None,
+    "finished_at": None,
+    "results": [],
+    "errors": [],
+}
 
 
 def _require_admin(secret: Optional[str]) -> None:
@@ -65,6 +82,90 @@ def _require_admin(secret: Optional[str]) -> None:
 
 
 SILENCE_THRESHOLD = timedelta(hours=24)
+
+
+def _reset_summary_redo_state(*, user_id: int, username: str | None, target_count: int) -> None:
+    _SUMMARY_REDO_USER_STATE.update({
+        "status": "running",
+        "user_id": user_id,
+        "username": username,
+        "target_chat_count": target_count,
+        "processed_chat_count": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "results": [],
+        "errors": [],
+    })
+
+
+async def _summary_redo_candidates(user_id: int, limit: int) -> list[int]:
+    async with SessionLocal() as db:
+        rows = (await db.execute(
+            select(Summary.agent_chat_id)
+            .join(AgentChat, AgentChat.id == Summary.agent_chat_id)
+            .where(
+                Summary.host_user_id == user_id,
+                Summary.summary_type == "agent_chat",
+                Summary.agent_chat_id.is_not(None),
+                select(func.count())
+                .select_from(AgentChatMessage)
+                .where(AgentChatMessage.agent_chat_id == Summary.agent_chat_id)
+                .scalar_subquery() > 0,
+            )
+            .order_by(Summary.created_at.desc())
+            .limit(limit)
+        )).scalars().all()
+    return list(dict.fromkeys(rows))
+
+
+async def _bg_redo_summaries_for_user(user_id: int, limit: int) -> None:
+    global _SUMMARY_REDO_USER_RUNNING
+    try:
+        async with SessionLocal() as db:
+            user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+            username = user.username if user else None
+        chat_ids = await _summary_redo_candidates(user_id, limit)
+        _reset_summary_redo_state(user_id=user_id, username=username, target_count=len(chat_ids))
+
+        for chat_id in chat_ids:
+            try:
+                async with SessionLocal() as db:
+                    chat = (await db.execute(
+                        select(AgentChat).where(AgentChat.id == chat_id)
+                    )).scalar_one_or_none()
+                    if chat is None:
+                        raise ValueError("agent_chat missing")
+                    await db.execute(delete(Summary).where(
+                        Summary.agent_chat_id == chat_id,
+                        Summary.host_user_id == user_id,
+                        Summary.summary_type == "agent_chat",
+                    ))
+                    await db.commit()
+                    new_summaries = await run_summary_for_chat(db, chat=chat)
+                    mine = [s for s in new_summaries if s.host_user_id == user_id]
+                    if not mine:
+                        raise RuntimeError("summary was not recreated")
+                    created = mine[0]
+                    _SUMMARY_REDO_USER_STATE["results"].append({
+                        "chat_id": chat_id,
+                        "summary_id": created.id,
+                        "verdict": created.verdict,
+                        "recommended_action": created.recommended_action,
+                    })
+            except Exception as e:
+                _SUMMARY_REDO_USER_STATE["errors"].append({
+                    "chat_id": chat_id,
+                    "error": f"{type(e).__name__}: {e}",
+                })
+            finally:
+                _SUMMARY_REDO_USER_STATE["processed_chat_count"] += 1
+
+        _SUMMARY_REDO_USER_STATE["status"] = (
+            "failed" if _SUMMARY_REDO_USER_STATE["errors"] else "done"
+        )
+        _SUMMARY_REDO_USER_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
+        _SUMMARY_REDO_USER_RUNNING = False
 
 
 async def _bg_observation_and_revisit(session_id: int, host_user_id: int) -> None:
@@ -323,6 +424,58 @@ async def seed_redo_status(
     """返回 redo-summaries job 的进程级 state(跟 /seed/status 独立)"""
     _require_admin(x_admin_secret)
     return get_redo_summaries_job_state()
+
+
+@router.post("/summary/redo-user/{user_id}")
+async def summary_redo_user(
+    user_id: int,
+    background_tasks: BackgroundTasks,
+    limit: int = 12,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    定向重刷某个 host_user_id 能看到的 agent_chat summary。
+
+    只删除并重建该 host 的 Summary,不动同场对方 host 的卡片。
+    用于 prompt/verdict 校准后,挑测试账号验证旧对话在新规则下的判定。
+    """
+    global _SUMMARY_REDO_USER_RUNNING
+    _require_admin(x_admin_secret)
+    if _SUMMARY_REDO_USER_RUNNING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="summary redo-user 已在运行中,GET /summary/redo-user/status 看进度",
+        )
+    if limit < 1 or limit > 50:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="limit 必须在 1..50")
+
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="user not found")
+        username = user.username
+    chat_ids = await _summary_redo_candidates(user_id, limit)
+    _SUMMARY_REDO_USER_RUNNING = True
+    _reset_summary_redo_state(user_id=user_id, username=username, target_count=len(chat_ids))
+    background_tasks.add_task(_bg_redo_summaries_for_user, user_id, limit)
+    return {
+        "ok": True,
+        "accepted": True,
+        "user_id": user_id,
+        "username": username,
+        "target_chat_count": len(chat_ids),
+        "limit": limit,
+        "hint": "GET /api/admin/summary/redo-user/status 看进度",
+    }
+
+
+@router.get("/summary/redo-user/status")
+async def summary_redo_user_status(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """返回定向重刷 user summary 的进程级状态"""
+    _require_admin(x_admin_secret)
+    return _SUMMARY_REDO_USER_STATE
 
 
 @router.get("/seed/verify")
