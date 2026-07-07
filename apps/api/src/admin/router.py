@@ -478,6 +478,54 @@ async def summary_redo_user_status(
     return _SUMMARY_REDO_USER_STATE
 
 
+@router.post("/summary/redo-chat/{chat_id}")
+async def summary_redo_chat(
+    chat_id: int,
+    host_user_id: int,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """
+    定向重刷某一场 agent_chat 对某个 host 的单张 summary。
+
+    用于 redo-user 某张卡重建失败后的补偿,或人工点名复查一张卡。
+    """
+    _require_admin(x_admin_secret)
+    async with SessionLocal() as db:
+        chat = (await db.execute(
+            select(AgentChat).where(AgentChat.id == chat_id)
+        )).scalar_one_or_none()
+        if chat is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="agent_chat not found")
+        msg_count = (await db.execute(
+            select(func.count()).select_from(AgentChatMessage)
+            .where(AgentChatMessage.agent_chat_id == chat_id)
+        )).scalar_one()
+        if msg_count == 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="agent_chat has no messages")
+        await db.execute(delete(Summary).where(
+            Summary.agent_chat_id == chat_id,
+            Summary.host_user_id == host_user_id,
+            Summary.summary_type == "agent_chat",
+        ))
+        await db.commit()
+        new_summaries = await run_summary_for_chat(db, chat=chat)
+        mine = [s for s in new_summaries if s.host_user_id == host_user_id]
+        if not mine:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="summary was not recreated",
+            )
+        created = mine[0]
+        return {
+            "ok": True,
+            "chat_id": chat_id,
+            "summary_id": created.id,
+            "host_user_id": host_user_id,
+            "verdict": created.verdict,
+            "recommended_action": created.recommended_action,
+        }
+
+
 @router.get("/seed/verify")
 async def seed_verify(
     x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
