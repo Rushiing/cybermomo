@@ -584,6 +584,30 @@ async def test_non_object_json_response_becomes_parse_error(
     assert chat.end_reason == "parse_error"
 
 
+async def test_agent_chat_repairs_malformed_json_once(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, _, _ = await _create_match_bundle(db_session)
+    llm = AsyncMock(side_effect=[
+        FakeLLMResp("intent=share; utterance=我先接这个点"),
+        FakeLLMResp(_llm_payload("share")),
+    ])
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", llm)
+
+    chat = await run_agent_chat(db_session, match=match, max_turns=1)
+    messages = (
+        await db_session.execute(
+            select(AgentChatMessage).where(AgentChatMessage.agent_chat_id == chat.id)
+        )
+    ).scalars().all()
+
+    assert chat.status == "done_natural"
+    assert chat.end_reason == "turn_limit"
+    assert len(messages) == 1
+    assert llm.await_count == 2
+
+
 async def test_no_hooks_terminates_chat_without_llm(
     db_session: AsyncSession,
     monkeypatch,

@@ -202,6 +202,20 @@ AVOID_BLOCK_TEMPLATE = """\
 {avoid_refs}
 """
 
+JSON_REPAIR_PROMPT_TEMPLATE = """\
+上一条输出没有解析成合法 JSON object。请把它改写成一个严格 JSON object。
+
+要求:
+- 只输出 JSON,不要 markdown,不要解释
+- 必须包含 intent / topic_ref / utterance / public_signals / private_signals / topic_close_payload
+- intent 只能是 probe / share / align / deflect / reject / wrap
+- public_signals 至少包含 intent 和 topic_ref
+- private_signals 必须包含 warmth_delta / topic_interest / disclosure_level / boundary_hit / rewrite_level
+
+上一条原文:
+{raw_text}
+"""
+
 
 # ========================================
 # 工具
@@ -775,4 +789,20 @@ async def _ask_one_turn(
     )
 
     data = _parse_loose_json(resp.text)
-    return data if isinstance(data, dict) else None
+    if isinstance(data, dict):
+        return data
+
+    repair_payload = JSON_REPAIR_PROMPT_TEMPLATE.format(raw_text=resp.text[:4000])
+    repair_resp = await llm_chat(
+        role="agent_chat",
+        messages=[Message(role="user", content=repair_payload)],
+        system="你是 JSON 修复器。只输出一个合法 JSON object,不要解释。",
+        max_tokens=700,
+        temperature=0.0,
+        db=db,
+        user_id=speaker_user_id,
+        related_table="agent_chats",
+        related_id=chat.id,
+    )
+    repaired = _parse_loose_json(repair_resp.text)
+    return repaired if isinstance(repaired, dict) else None
