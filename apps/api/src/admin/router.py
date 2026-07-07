@@ -71,6 +71,17 @@ _SUMMARY_REDO_USER_STATE: dict = {
     "results": [],
     "errors": [],
 }
+_AGENT_CHAT_SAMPLE_RUNNING = False
+_AGENT_CHAT_SAMPLE_STATE: dict = {
+    "status": "idle",
+    "user_id": None,
+    "match_id": None,
+    "stage": None,
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+    "errors": [],
+}
 
 
 def _require_admin(secret: Optional[str]) -> None:
@@ -99,6 +110,138 @@ def _reset_summary_redo_state(*, user_id: int, username: str | None, target_coun
         "results": [],
         "errors": [],
     })
+
+
+def _reset_agent_chat_sample_state(*, user_id: int, match_id: int | None) -> None:
+    _AGENT_CHAT_SAMPLE_STATE.update({
+        "status": "running",
+        "user_id": user_id,
+        "match_id": match_id,
+        "stage": "queued",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "result": None,
+        "errors": [],
+    })
+
+
+async def _bg_run_agent_chat_user_sample(
+    *,
+    user_id: int,
+    match_id: int | None,
+    max_turns: int,
+    avoid_previous: bool,
+    force_clear_running: bool,
+) -> None:
+    global _AGENT_CHAT_SAMPLE_RUNNING
+    try:
+        async with SessionLocal() as db:
+            user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+            if user is None:
+                raise ValueError("user not found")
+
+            if match_id is not None:
+                match = (await db.execute(select(Match).where(Match.id == match_id))).scalar_one_or_none()
+                if match is None:
+                    raise ValueError("match not found")
+                if user_id not in {match.user_a_id, match.user_b_id}:
+                    raise ValueError("user 不属于该 match")
+            else:
+                match = (await db.execute(
+                    select(Match)
+                    .where(or_(Match.user_a_id == user_id, Match.user_b_id == user_id))
+                    .where(
+                        select(func.count())
+                        .select_from(MatchHook)
+                        .where(MatchHook.match_id == Match.id)
+                        .scalar_subquery() > 0
+                    )
+                    .order_by(Match.overall_score.desc(), Match.id.desc())
+                    .limit(1)
+                )).scalar_one_or_none()
+                if match is None:
+                    raise ValueError("没有找到带 hooks 的 match")
+
+            _AGENT_CHAT_SAMPLE_STATE["match_id"] = match.id
+            running_chats = (await db.execute(
+                select(AgentChat)
+                .where(AgentChat.match_id == match.id, AgentChat.status == "running")
+            )).scalars().all()
+            if running_chats and not force_clear_running:
+                running_ids = [chat.id for chat in running_chats]
+                raise RuntimeError(f"match {match.id} 已有 running agent_chat={running_ids}")
+            if running_chats and force_clear_running:
+                now = datetime.now(timezone.utc)
+                for stale in running_chats:
+                    stale.status = "done_terminated"
+                    stale.end_reason = "manual_interrupted"
+                    stale.ended_at = now
+                await db.commit()
+
+            avoid_topic_refs: list[str] = []
+            if avoid_previous:
+                rows = (await db.execute(
+                    select(AgentChatMessage.topic_ref)
+                    .join(AgentChat, AgentChat.id == AgentChatMessage.agent_chat_id)
+                    .where(AgentChat.match_id == match.id)
+                )).scalars().all()
+                avoid_topic_refs = list(dict.fromkeys(str(r) for r in rows if r))
+
+            _AGENT_CHAT_SAMPLE_STATE["stage"] = "agent_chat"
+            chat = await run_agent_chat(
+                db,
+                match=match,
+                max_turns=max_turns,
+                avoid_topic_refs=avoid_topic_refs,
+            )
+            match.status = "agent_chat_done" if "done" in (chat.status or "") else "agent_chat_running"
+            await db.commit()
+
+            _AGENT_CHAT_SAMPLE_STATE["stage"] = "summary"
+            summaries = await run_summary_for_chat(db, chat=chat)
+            messages = (await db.execute(
+                select(AgentChatMessage)
+                .where(AgentChatMessage.agent_chat_id == chat.id)
+                .order_by(AgentChatMessage.turn)
+            )).scalars().all()
+            host_summary = next((s for s in summaries if s.host_user_id == user_id), None)
+            _AGENT_CHAT_SAMPLE_STATE["result"] = {
+                "user_id": user_id,
+                "match_id": match.id,
+                "peer_user_id": match.user_b_id if match.user_a_id == user_id else match.user_a_id,
+                "agent_chat": {
+                    "id": chat.id,
+                    "status": chat.status,
+                    "end_reason": chat.end_reason,
+                    "turns": len(messages),
+                },
+                "host_summary": None if host_summary is None else {
+                    "id": host_summary.id,
+                    "verdict": host_summary.verdict,
+                    "recommended_action": host_summary.recommended_action,
+                    "highlights": host_summary.highlights,
+                    "risks": host_summary.risks,
+                    "evidence_chunks": host_summary.evidence_chunks,
+                },
+                "messages": [
+                    {
+                        "turn": msg.turn,
+                        "speaker_user_id": msg.speaker_user_id,
+                        "intent": msg.intent,
+                        "topic_ref": msg.topic_ref,
+                        "utterance": msg.utterance,
+                    }
+                    for msg in messages
+                ],
+            }
+            _AGENT_CHAT_SAMPLE_STATE["status"] = "done"
+    except Exception as e:
+        _AGENT_CHAT_SAMPLE_STATE["status"] = "failed"
+        _AGENT_CHAT_SAMPLE_STATE["errors"].append(f"{type(e).__name__}: {e}")
+    finally:
+        _AGENT_CHAT_SAMPLE_STATE["stage"] = None
+        _AGENT_CHAT_SAMPLE_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _AGENT_CHAT_SAMPLE_RUNNING = False
 
 
 async def _summary_redo_candidates(user_id: int, limit: int) -> list[int]:
@@ -276,116 +419,57 @@ async def rerun_pipeline(
 @router.post("/agent-chat/run-user/{user_id}")
 async def agent_chat_run_user_sample(
     user_id: int,
+    background_tasks: BackgroundTasks,
     match_id: Optional[int] = None,
     max_turns: int = 10,
     avoid_previous: bool = False,
+    force_clear_running: bool = False,
     x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
 ):
     """
-    定向给某 user 跑一场新的 Agent 互聊样本,并同步生成 summary。
+    定向给某 user 跑一场新的 Agent 互聊样本,并生成 summary。
 
     用途是 prompt/effect 调试:不新建 match,只复用已有 match + hooks。
     """
+    global _AGENT_CHAT_SAMPLE_RUNNING
     _require_admin(x_admin_secret)
+    if _AGENT_CHAT_SAMPLE_RUNNING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "message": "agent-chat sample 已在运行中",
+                "state": _AGENT_CHAT_SAMPLE_STATE,
+            },
+        )
     if max_turns < 4 or max_turns > 14:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="max_turns 必须在 4..14")
 
-    async with SessionLocal() as db:
-        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        if user is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="user not found")
+    _AGENT_CHAT_SAMPLE_RUNNING = True
+    _reset_agent_chat_sample_state(user_id=user_id, match_id=match_id)
+    background_tasks.add_task(
+        _bg_run_agent_chat_user_sample,
+        user_id=user_id,
+        match_id=match_id,
+        max_turns=max_turns,
+        avoid_previous=avoid_previous,
+        force_clear_running=force_clear_running,
+    )
+    return {
+        "ok": True,
+        "accepted": True,
+        "user_id": user_id,
+        "match_id": match_id,
+        "hint": "GET /api/admin/agent-chat/run-user/status 看进度和结果",
+    }
 
-        if match_id is not None:
-            match = (await db.execute(select(Match).where(Match.id == match_id))).scalar_one_or_none()
-            if match is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, detail="match not found")
-            if user_id not in {match.user_a_id, match.user_b_id}:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="user 不属于该 match")
-        else:
-            match = (await db.execute(
-                select(Match)
-                .where(or_(Match.user_a_id == user_id, Match.user_b_id == user_id))
-                .where(
-                    select(func.count())
-                    .select_from(MatchHook)
-                    .where(MatchHook.match_id == Match.id)
-                    .scalar_subquery() > 0
-                )
-                .order_by(Match.overall_score.desc(), Match.id.desc())
-                .limit(1)
-            )).scalar_one_or_none()
-            if match is None:
-                raise HTTPException(
-                    status.HTTP_404_NOT_FOUND,
-                    detail="没有找到带 hooks 的 match",
-                )
 
-        running = (await db.execute(
-            select(AgentChat.id)
-            .where(AgentChat.match_id == match.id, AgentChat.status == "running")
-            .limit(1)
-        )).scalar_one_or_none()
-        if running is not None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail=f"match {match.id} 已有 running agent_chat={running}",
-            )
-
-        avoid_topic_refs: list[str] = []
-        if avoid_previous:
-            rows = (await db.execute(
-                select(AgentChatMessage.topic_ref)
-                .join(AgentChat, AgentChat.id == AgentChatMessage.agent_chat_id)
-                .where(AgentChat.match_id == match.id)
-            )).scalars().all()
-            avoid_topic_refs = list(dict.fromkeys(str(r) for r in rows if r))
-
-        chat = await run_agent_chat(
-            db,
-            match=match,
-            max_turns=max_turns,
-            avoid_topic_refs=avoid_topic_refs,
-        )
-        match.status = "agent_chat_done" if "done" in (chat.status or "") else "agent_chat_running"
-        await db.commit()
-
-        summaries = await run_summary_for_chat(db, chat=chat)
-        messages = (await db.execute(
-            select(AgentChatMessage)
-            .where(AgentChatMessage.agent_chat_id == chat.id)
-            .order_by(AgentChatMessage.turn)
-        )).scalars().all()
-        host_summary = next((s for s in summaries if s.host_user_id == user_id), None)
-        return {
-            "ok": True,
-            "user_id": user_id,
-            "match_id": match.id,
-            "peer_user_id": match.user_b_id if match.user_a_id == user_id else match.user_a_id,
-            "agent_chat": {
-                "id": chat.id,
-                "status": chat.status,
-                "end_reason": chat.end_reason,
-                "turns": len(messages),
-            },
-            "host_summary": None if host_summary is None else {
-                "id": host_summary.id,
-                "verdict": host_summary.verdict,
-                "recommended_action": host_summary.recommended_action,
-                "highlights": host_summary.highlights,
-                "risks": host_summary.risks,
-                "evidence_chunks": host_summary.evidence_chunks,
-            },
-            "messages": [
-                {
-                    "turn": msg.turn,
-                    "speaker_user_id": msg.speaker_user_id,
-                    "intent": msg.intent,
-                    "topic_ref": msg.topic_ref,
-                    "utterance": msg.utterance,
-                }
-                for msg in messages
-            ],
-        }
+@router.get("/agent-chat/run-user/status")
+async def agent_chat_run_user_sample_status(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """返回定向 Agent 互聊样本的进程级状态"""
+    _require_admin(x_admin_secret)
+    return _AGENT_CHAT_SAMPLE_STATE
 
 
 @router.post("/backfill-embeddings")
