@@ -191,6 +191,112 @@ async def test_invalid_verdict_falls_back_to_observe(
     assert {s.verdict for s in rows} == {"有点意思再观察"}
 
 
+async def test_laidian_downgrades_without_visible_strong_evidence(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    chat, _, _ = await _create_summary_bundle(db_session)
+    monkeypatch.setattr(
+        "src.summary.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(_summary_payload(
+            verdict="来电",
+            recommended_action="开真人聊天",
+        ))),
+    )
+
+    await run_summary_for_chat(db_session, chat=chat)
+    rows = (await db_session.execute(select(Summary))).scalars().all()
+
+    assert {s.verdict for s in rows} == {"有点意思再观察"}
+    assert {s.recommended_action for s in rows} == {"再派一次"}
+    assert all("先不把这场判成来电" in s.risks[0]["text"] for s in rows)
+
+
+async def test_laidian_allowed_when_transcript_has_visible_bidirectional_push(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    chat, user_a, user_b = await _create_summary_bundle(db_session, with_messages=False)
+    db_session.add_all(
+        [
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=1,
+                topic_ref="topic_a",
+                intent="probe",
+                utterance="你说喜欢高密度对话，具体是会一直追问到哪一层？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=2,
+                topic_ref="topic_a",
+                intent="share",
+                utterance="我会追到对方开始说真实选择，而不是只讲观点。你能接受这种强度吗？",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=3,
+                topic_ref="topic_a",
+                intent="share",
+                utterance="能接受，但我会看对方是不是也愿意暴露自己的判断成本，不只是审问我。",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=4,
+                topic_ref="topic_a",
+                intent="align",
+                utterance="这个公平。我也不喜欢单向审问，所以会先把自己的犹豫摊出来再问人。",
+                public_signals={"intent": "align"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=5,
+                topic_ref="topic_b",
+                intent="probe",
+                utterance="那如果聊到边界，你会直接说需要留白，还是先自己往后退一点？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=6,
+                topic_ref="topic_b",
+                intent="share",
+                utterance="我会直接说，不然对方会误读成冷掉。你刚才问这个，感觉你也在意节奏别被猜。",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+        ]
+    )
+    await db_session.commit()
+    monkeypatch.setattr(
+        "src.summary.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(_summary_payload(
+            verdict="来电",
+            recommended_action="开真人聊天",
+        ))),
+    )
+
+    await run_summary_for_chat(db_session, chat=chat)
+    rows = (await db_session.execute(select(Summary))).scalars().all()
+
+    assert {s.verdict for s in rows} == {"来电"}
+    assert {s.recommended_action for s in rows} == {"开真人聊天"}
+
+
 async def test_invalid_recommended_action_falls_back_to_redispatch(
     db_session: AsyncSession,
     monkeypatch,
