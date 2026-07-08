@@ -493,6 +493,78 @@ async def agent_chat_run_user_sample_status(
     return _AGENT_CHAT_SAMPLE_STATE
 
 
+@router.get("/agent-chat/latest-user/{user_id}")
+async def agent_chat_latest_user_sample(
+    user_id: int,
+    limit: int = 1,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """从 DB 读取某 user 最近的 Agent 互聊样本结果,不依赖 worker 内存。"""
+    _require_admin(x_admin_secret)
+    if limit < 1 or limit > 10:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="limit 必须在 1..10")
+    async with SessionLocal() as db:
+        chats = (await db.execute(
+            select(AgentChat)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(or_(Match.user_a_id == user_id, Match.user_b_id == user_id))
+            .order_by(AgentChat.id.desc())
+            .limit(limit)
+        )).scalars().all()
+
+        results: list[dict] = []
+        for chat in chats:
+            match = (await db.execute(
+                select(Match).where(Match.id == chat.match_id)
+            )).scalar_one_or_none()
+            if match is None:
+                continue
+            messages = (await db.execute(
+                select(AgentChatMessage)
+                .where(AgentChatMessage.agent_chat_id == chat.id)
+                .order_by(AgentChatMessage.turn)
+            )).scalars().all()
+            host_summary = (await db.execute(
+                select(Summary)
+                .where(
+                    Summary.agent_chat_id == chat.id,
+                    Summary.host_user_id == user_id,
+                    Summary.summary_type == "agent_chat",
+                )
+                .limit(1)
+            )).scalar_one_or_none()
+            results.append({
+                "user_id": user_id,
+                "match_id": match.id,
+                "peer_user_id": match.user_b_id if match.user_a_id == user_id else match.user_a_id,
+                "agent_chat": {
+                    "id": chat.id,
+                    "status": chat.status,
+                    "end_reason": chat.end_reason,
+                    "turns": len(messages),
+                },
+                "host_summary": None if host_summary is None else {
+                    "id": host_summary.id,
+                    "verdict": host_summary.verdict,
+                    "recommended_action": host_summary.recommended_action,
+                    "highlights": host_summary.highlights,
+                    "risks": host_summary.risks,
+                    "evidence_chunks": host_summary.evidence_chunks,
+                },
+                "messages": [
+                    {
+                        "turn": msg.turn,
+                        "speaker_user_id": msg.speaker_user_id,
+                        "intent": msg.intent,
+                        "topic_ref": msg.topic_ref,
+                        "utterance": msg.utterance,
+                    }
+                    for msg in messages
+                ],
+            })
+        return {"ok": True, "user_id": user_id, "results": results}
+
+
 @router.post("/backfill-embeddings")
 async def backfill_embeddings(
     x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
