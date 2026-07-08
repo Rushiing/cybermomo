@@ -219,15 +219,6 @@ def _visible_mismatch_message(messages: list[AgentChatMessage]) -> AgentChatMess
     return None
 
 
-def _speaker_has_positive_warmth(messages: list[AgentChatMessage], user_id: int) -> bool:
-    for msg in messages:
-        if msg.speaker_user_id != user_id:
-            continue
-        if (msg.private_signals or {}).get("warmth_delta") == 1:
-            return True
-    return False
-
-
 def _strong_mismatch_reason(
     chat: AgentChat,
     messages: list[AgentChatMessage],
@@ -245,8 +236,6 @@ def _strong_mismatch_reason(
         recent = messages[-5:]
         if sum(1 for msg in recent if str(msg.intent or "") == "deflect") >= 2:
             return "后半段连续在绕开,不是自然升温。", recent[-1]
-        if any(not _speaker_has_positive_warmth(messages, uid) for uid in user_ids):
-            return "至少一方全场没有明显升温信号。", None
 
     return None
 
