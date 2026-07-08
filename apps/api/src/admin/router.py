@@ -129,6 +129,7 @@ async def _bg_run_agent_chat_user_sample(
     *,
     user_id: int,
     match_id: int | None,
+    pick: str,
     max_turns: int,
     avoid_previous: bool,
     force_clear_running: bool,
@@ -149,6 +150,11 @@ async def _bg_run_agent_chat_user_sample(
                 if user_id not in {match.user_a_id, match.user_b_id}:
                     raise ValueError("user 不属于该 match")
             else:
+                order_by = (
+                    (Match.overall_score.asc(), Match.id.desc())
+                    if pick == "lowest"
+                    else (Match.overall_score.desc(), Match.id.desc())
+                )
                 match = (await db.execute(
                     select(Match)
                     .where(or_(Match.user_a_id == user_id, Match.user_b_id == user_id))
@@ -158,7 +164,7 @@ async def _bg_run_agent_chat_user_sample(
                         .where(MatchHook.match_id == Match.id)
                         .scalar_subquery() > 0
                     )
-                    .order_by(Match.overall_score.desc(), Match.id.desc())
+                    .order_by(*order_by)
                     .limit(1)
                 )).scalar_one_or_none()
                 if match is None:
@@ -425,6 +431,7 @@ async def agent_chat_run_user_sample(
     user_id: int,
     background_tasks: BackgroundTasks,
     match_id: Optional[int] = None,
+    pick: str = "highest",
     max_turns: int = 10,
     avoid_previous: bool = False,
     force_clear_running: bool = False,
@@ -449,6 +456,8 @@ async def agent_chat_run_user_sample(
         )
     if max_turns < 4 or max_turns > 14:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="max_turns 必须在 4..14")
+    if pick not in {"highest", "lowest"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="pick 必须是 highest 或 lowest")
     target_user_id = direction_target_user_id
     if direction_hint and target_user_id is None:
         target_user_id = user_id
@@ -459,6 +468,7 @@ async def agent_chat_run_user_sample(
         _bg_run_agent_chat_user_sample,
         user_id=user_id,
         match_id=match_id,
+        pick=pick,
         max_turns=max_turns,
         avoid_previous=avoid_previous,
         force_clear_running=force_clear_running,
