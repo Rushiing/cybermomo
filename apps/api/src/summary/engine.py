@@ -250,11 +250,21 @@ def _has_direct_visible_mismatch(text: str) -> bool:
         return False
 
     for pos in hit_positions:
-        before = text[max(0, pos - 16):pos]
-        around = text[max(0, pos - 18):pos + 18]
-        if any(anchor in before for anchor in _MISMATCH_HYPOTHETICAL_ANCHORS):
+        before_full = text[:pos]
+        before = text[max(0, pos - 20):pos]
+        after = text[pos:pos + 10]
+        last_hypothetical = max(
+            (before_full.rfind(anchor) for anchor in _MISMATCH_HYPOTHETICAL_ANCHORS),
+            default=-1,
+        )
+        last_direct = max(
+            (before_full.rfind(anchor) for anchor in _MISMATCH_DIRECT_ANCHORS),
+            default=-1,
+        )
+        direct_before = any(anchor in before for anchor in _MISMATCH_DIRECT_ANCHORS)
+        if last_hypothetical > last_direct and not direct_before:
             continue
-        if any(anchor in around for anchor in _MISMATCH_DIRECT_ANCHORS):
+        if direct_before or "你" in after:
             return True
     return False
 

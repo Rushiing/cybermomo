@@ -324,7 +324,7 @@ async def test_hypothetical_mismatch_phrase_does_not_force_buhe(
                 turn=2,
                 topic_ref="dating_pace",
                 intent="share",
-                utterance="我会先问对方怎么安排周末，不看口号。有一类人会聊不下去，但你这个问题挺对路。",
+                utterance="我会先问对方怎么安排周末，不看口号。有一类话我听了就降温，太空泛。聊不下去。但你这个问题挺对路。",
                 public_signals={"intent": "share"},
                 private_signals={"warmth_delta": 1, "topic_interest": 1},
             ),
