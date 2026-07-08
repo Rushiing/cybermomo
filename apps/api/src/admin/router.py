@@ -82,6 +82,28 @@ _AGENT_CHAT_SAMPLE_STATE: dict = {
     "result": None,
     "errors": [],
 }
+_AGENT_CHAT_BATCH_RUNNING = False
+_AGENT_CHAT_BATCH_STATE: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "requested_count": 0,
+    "target_counts": {},
+    "processed_count": 0,
+    "current": None,
+    "results": [],
+    "errors": [],
+}
+
+_SPARK_SAMPLE_HINT = (
+    "测试来电：不要表演上头。优先探一个真实共同点；如果双方连续接住，"
+    "要可见升温：接住具体选择，补自己的相似或互补细节，再落到真实相处场景。"
+    "至少用第二个证据面验证，不要只靠同一个兴趣点。"
+)
+_MISMATCH_SAMPLE_HINT = (
+    "测试不合：不要救场。围绕休息方式、正事/娱乐、效率/随机、聊天频率探差异；"
+    "连续两次接不住就说：这个点我不太在这/这个节奏我接不住/可能不太合，然后 deflect 或 wrap。"
+)
 
 
 def _require_admin(secret: Optional[str]) -> None:
@@ -123,6 +145,25 @@ def _reset_agent_chat_sample_state(*, user_id: int, match_id: int | None) -> Non
         "result": None,
         "errors": [],
     })
+
+
+def _reset_agent_chat_batch_state(*, requested_count: int, target_counts: dict[str, int]) -> None:
+    _AGENT_CHAT_BATCH_STATE.update({
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "requested_count": requested_count,
+        "target_counts": target_counts,
+        "processed_count": 0,
+        "current": None,
+        "results": [],
+        "errors": [],
+    })
+
+
+def _mock_match_filter():
+    mock_ids = select(User.id).where(User.is_system_mock.is_(True))
+    return or_(Match.user_a_id.in_(mock_ids), Match.user_b_id.in_(mock_ids))
 
 
 async def _bg_run_agent_chat_user_sample(
@@ -252,6 +293,138 @@ async def _bg_run_agent_chat_user_sample(
         _AGENT_CHAT_SAMPLE_STATE["stage"] = None
         _AGENT_CHAT_SAMPLE_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
         _AGENT_CHAT_SAMPLE_RUNNING = False
+
+
+async def _agent_chat_batch_matches(
+    db: AsyncSession,
+    *,
+    mode: str,
+    count: int,
+) -> list[Match]:
+    if count <= 0:
+        return []
+
+    hook_count = (
+        select(func.count())
+        .select_from(MatchHook)
+        .where(MatchHook.match_id == Match.id)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(Match)
+        .where(_mock_match_filter(), hook_count > 0)
+        .limit(count)
+    )
+    if mode == "spark":
+        stmt = stmt.order_by(Match.overall_score.desc(), Match.id.desc())
+    elif mode == "mismatch":
+        stmt = stmt.order_by(Match.overall_score.asc(), Match.id.desc())
+    else:
+        stmt = (
+            stmt
+            .where(Match.overall_score >= 0.62, Match.overall_score <= 0.78)
+            .order_by(Match.id.desc())
+        )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def _bg_run_agent_chat_sample_batch(
+    *,
+    target_counts: dict[str, int],
+    max_turns: int,
+    avoid_previous: bool,
+) -> None:
+    global _AGENT_CHAT_BATCH_RUNNING
+    try:
+        async with SessionLocal() as db:
+            plan: list[tuple[str, Match]] = []
+            for mode in ("spark", "observe", "mismatch"):
+                matches = await _agent_chat_batch_matches(
+                    db,
+                    mode=mode,
+                    count=int(target_counts.get(mode, 0)),
+                )
+                plan.extend((mode, match) for match in matches)
+
+            for mode, match in plan:
+                _AGENT_CHAT_BATCH_STATE["current"] = {
+                    "mode": mode,
+                    "match_id": match.id,
+                    "user_a_id": match.user_a_id,
+                    "user_b_id": match.user_b_id,
+                }
+                try:
+                    running_chats = (await db.execute(
+                        select(AgentChat)
+                        .where(AgentChat.match_id == match.id, AgentChat.status == "running")
+                    )).scalars().all()
+                    now = datetime.now(timezone.utc)
+                    for stale in running_chats:
+                        stale.status = "done_terminated"
+                        stale.end_reason = "manual_interrupted"
+                        stale.ended_at = now
+                    if running_chats:
+                        await db.commit()
+
+                    avoid_topic_refs: list[str] = []
+                    if avoid_previous:
+                        rows = (await db.execute(
+                            select(AgentChatMessage.topic_ref)
+                            .join(AgentChat, AgentChat.id == AgentChatMessage.agent_chat_id)
+                            .where(AgentChat.match_id == match.id)
+                        )).scalars().all()
+                        avoid_topic_refs = list(dict.fromkeys(str(r) for r in rows if r))
+
+                    direction_hint = None
+                    direction_target_user_id = None
+                    if mode == "spark":
+                        direction_hint = _SPARK_SAMPLE_HINT
+                        direction_target_user_id = 0
+                    elif mode == "mismatch":
+                        direction_hint = _MISMATCH_SAMPLE_HINT
+                        direction_target_user_id = 0
+
+                    chat = await run_agent_chat(
+                        db,
+                        match=match,
+                        max_turns=max_turns,
+                        avoid_topic_refs=avoid_topic_refs,
+                        direction_hint=direction_hint,
+                        direction_target_user_id=direction_target_user_id,
+                    )
+                    match.status = (
+                        "agent_chat_done"
+                        if "done" in (chat.status or "")
+                        else "agent_chat_running"
+                    )
+                    await db.commit()
+
+                    summaries = await run_summary_for_chat(db, chat=chat)
+                    _AGENT_CHAT_BATCH_STATE["results"].append({
+                        "mode": mode,
+                        "match_id": match.id,
+                        "agent_chat_id": chat.id,
+                        "status": chat.status,
+                        "end_reason": chat.end_reason,
+                        "summary_count": len(summaries),
+                        "verdicts": [s.verdict for s in summaries],
+                    })
+                except Exception as e:
+                    _AGENT_CHAT_BATCH_STATE["errors"].append({
+                        "mode": mode,
+                        "match_id": match.id,
+                        "error": f"{type(e).__name__}: {e}",
+                    })
+                finally:
+                    _AGENT_CHAT_BATCH_STATE["processed_count"] += 1
+                    _AGENT_CHAT_BATCH_STATE["current"] = None
+
+        _AGENT_CHAT_BATCH_STATE["status"] = (
+            "failed" if _AGENT_CHAT_BATCH_STATE["errors"] else "done"
+        )
+    finally:
+        _AGENT_CHAT_BATCH_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _AGENT_CHAT_BATCH_RUNNING = False
 
 
 async def _summary_redo_candidates(user_id: int, limit: int) -> list[int]:
@@ -491,6 +664,190 @@ async def agent_chat_run_user_sample_status(
     """返回定向 Agent 互聊样本的进程级状态"""
     _require_admin(x_admin_secret)
     return _AGENT_CHAT_SAMPLE_STATE
+
+
+@router.post("/agent-chat/sample-batch")
+async def agent_chat_sample_batch(
+    background_tasks: BackgroundTasks,
+    batch_size: int = 12,
+    max_turns: int = 10,
+    spark_count: Optional[int] = None,
+    observe_count: Optional[int] = None,
+    mismatch_count: Optional[int] = None,
+    avoid_previous: bool = True,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """按目标比例批量跑新 Agent 互聊样本,用于校准新样本 verdict 分布。"""
+    global _AGENT_CHAT_BATCH_RUNNING
+    _require_admin(x_admin_secret)
+    if _AGENT_CHAT_BATCH_RUNNING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "message": "agent-chat sample batch 已在运行中",
+                "state": _AGENT_CHAT_BATCH_STATE,
+            },
+        )
+    if batch_size < 3 or batch_size > 30:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="batch_size 必须在 3..30")
+    if max_turns < 6 or max_turns > 14:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="max_turns 必须在 6..14")
+
+    if spark_count is None and observe_count is None and mismatch_count is None:
+        spark = max(1, round(batch_size * 0.30))
+        mismatch = max(1, round(batch_size * 0.20))
+        observe = max(0, batch_size - spark - mismatch)
+    else:
+        spark = int(spark_count or 0)
+        observe = int(observe_count or 0)
+        mismatch = int(mismatch_count or 0)
+        if spark + observe + mismatch != batch_size:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="spark_count + observe_count + mismatch_count 必须等于 batch_size",
+            )
+
+    target_counts = {"spark": spark, "observe": observe, "mismatch": mismatch}
+    _AGENT_CHAT_BATCH_RUNNING = True
+    _reset_agent_chat_batch_state(requested_count=batch_size, target_counts=target_counts)
+    background_tasks.add_task(
+        _bg_run_agent_chat_sample_batch,
+        target_counts=target_counts,
+        max_turns=max_turns,
+        avoid_previous=avoid_previous,
+    )
+    return {
+        "ok": True,
+        "accepted": True,
+        "started_at": _AGENT_CHAT_BATCH_STATE["started_at"],
+        "batch_size": batch_size,
+        "target_counts": target_counts,
+        "hint": (
+            "GET /api/admin/agent-chat/sample-batch/status 看进程状态；"
+            "GET /api/admin/agent-chat/sample-batch/distribution?since=<started_at> 看 DB 分布"
+        ),
+    }
+
+
+@router.get("/agent-chat/sample-batch/status")
+async def agent_chat_sample_batch_status(
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """返回批量样本任务的进程级状态。Railway 多 worker 下以 distribution DB 查询为准。"""
+    _require_admin(x_admin_secret)
+    return _AGENT_CHAT_BATCH_STATE
+
+
+@router.get("/agent-chat/sample-batch/distribution")
+async def agent_chat_sample_batch_distribution(
+    since: Optional[str] = None,
+    minutes: int = 180,
+    limit: int = 20,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """按 AgentChat.started_at 时间窗统计新样本 verdict 分布。"""
+    _require_admin(x_admin_secret)
+    if limit < 1 or limit > 50:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="limit 必须在 1..50")
+    if minutes < 1 or minutes > 24 * 60:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="minutes 必须在 1..1440")
+
+    if since:
+        try:
+            start = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"since 格式错误: {e}") from e
+    elif _AGENT_CHAT_BATCH_STATE.get("started_at"):
+        start = datetime.fromisoformat(str(_AGENT_CHAT_BATCH_STATE["started_at"]))
+    else:
+        start = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+
+    async with SessionLocal() as db:
+        chat_total = int((await db.execute(
+            select(func.count())
+            .select_from(AgentChat)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(_mock_match_filter(), AgentChat.started_at >= start)
+        )).scalar_one() or 0)
+        summary_total = int((await db.execute(
+            select(func.count())
+            .select_from(Summary)
+            .join(AgentChat, Summary.agent_chat_id == AgentChat.id)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(
+                _mock_match_filter(),
+                AgentChat.started_at >= start,
+                Summary.summary_type == "agent_chat",
+            )
+        )).scalar_one() or 0)
+        verdict_rows = (await db.execute(
+            select(Summary.verdict, func.count())
+            .join(AgentChat, Summary.agent_chat_id == AgentChat.id)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(
+                _mock_match_filter(),
+                AgentChat.started_at >= start,
+                Summary.summary_type == "agent_chat",
+            )
+            .group_by(Summary.verdict)
+            .order_by(Summary.verdict)
+        )).all()
+        status_rows = (await db.execute(
+            select(AgentChat.status, func.count())
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(_mock_match_filter(), AgentChat.started_at >= start)
+            .group_by(AgentChat.status)
+            .order_by(AgentChat.status)
+        )).all()
+        latest_chats = (await db.execute(
+            select(AgentChat)
+            .join(Match, AgentChat.match_id == Match.id)
+            .where(_mock_match_filter(), AgentChat.started_at >= start)
+            .order_by(AgentChat.id.desc())
+            .limit(limit)
+        )).scalars().all()
+
+        latest = []
+        for chat in latest_chats:
+            summaries = (await db.execute(
+                select(Summary)
+                .where(Summary.agent_chat_id == chat.id, Summary.summary_type == "agent_chat")
+                .order_by(Summary.host_user_id)
+            )).scalars().all()
+            latest.append({
+                "agent_chat_id": chat.id,
+                "match_id": chat.match_id,
+                "status": chat.status,
+                "end_reason": chat.end_reason,
+                "started_at": chat.started_at.isoformat(),
+                "verdicts": [s.verdict for s in summaries],
+            })
+
+    verdict_counts = {str(verdict): int(count or 0) for verdict, count in verdict_rows}
+    distribution = []
+    for verdict in ("来电", "有点意思再观察", "不合"):
+        count = verdict_counts.get(verdict, 0)
+        distribution.append({
+            "verdict": verdict,
+            "count": count,
+            "actual_ratio": round(count / summary_total, 3) if summary_total else 0.0,
+        })
+
+    return {
+        "ok": True,
+        "since": start.isoformat(),
+        "chat_total": chat_total,
+        "summary_total": summary_total,
+        "by_status": {str(k): int(v or 0) for k, v in status_rows},
+        "distribution": distribution,
+        "extra_verdicts": {
+            k: v for k, v in verdict_counts.items()
+            if k not in {"来电", "有点意思再观察", "不合"}
+        },
+        "latest": latest,
+    }
 
 
 @router.get("/agent-chat/latest-user/{user_id}")

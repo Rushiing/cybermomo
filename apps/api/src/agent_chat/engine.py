@@ -836,6 +836,13 @@ async def _ask_one_turn(
                 "- 连续两次接不住时，直接把降温说出来：这个点我不太在这 / 这个节奏我接不住 / 可能不太合。\n"
                 "- 不要用“也挺好”“那挺稳的”把明显差异抹平；intent 优先用 deflect/reject/wrap。\n"
             )
+        if "来电" in direction_hint:
+            direction_block += (
+                "\n【来电采样约束】\n"
+                "- 这不是让你表演上头；但如果一个点真的被双方连续接住，不要一直审问式 probe。\n"
+                "- 至少做一次可见升温：接住对方的具体选择，补一个自己的相似或互补细节，再落到真实相处场景。\n"
+                "- 来电必须有第二个证据面验证；不要只靠同一个兴趣点，也不要泛泛夸对方。\n"
+            )
 
     user_payload = TURN_PROMPT_TEMPLATE.format(
         md_profile=md_profile_text,
