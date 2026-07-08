@@ -337,6 +337,72 @@ async def test_observe_verdict_cannot_recommend_open_chat(
     assert {s.recommended_action for s in rows} == {"再派一次"}
 
 
+async def test_visible_mismatch_forces_buhe_verdict(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    chat, user_a, user_b = await _create_summary_bundle(db_session, with_messages=False)
+    db_session.add_all(
+        [
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=1,
+                topic_ref="party_pace",
+                intent="probe",
+                utterance="我喜欢临时被朋友拉去很热闹的局，你会觉得刺激还是累？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": 0, "topic_interest": 0},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=2,
+                topic_ref="party_pace",
+                intent="deflect",
+                utterance="这个我不太在这，太吵和太临时的局我基本接不住。",
+                public_signals={"intent": "deflect"},
+                private_signals={"warmth_delta": -1, "topic_interest": -1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=3,
+                topic_ref="party_pace",
+                intent="probe",
+                utterance="但如果是熟人临时喊你，给个面子也不行吗？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": -1, "topic_interest": -1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=4,
+                topic_ref="party_pace",
+                intent="reject",
+                utterance="不太行，这个节奏对我就是不合适，我会直接拒绝。",
+                public_signals={"intent": "reject"},
+                private_signals={"warmth_delta": -1, "topic_interest": -1, "boundary_hit": "边界"},
+            ),
+        ]
+    )
+    await db_session.commit()
+    monkeypatch.setattr(
+        "src.summary.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(_summary_payload(
+            verdict="有点意思再观察",
+            recommended_action="再派一次",
+        ))),
+    )
+
+    await run_summary_for_chat(db_session, chat=chat)
+    rows = (await db_session.execute(select(Summary))).scalars().all()
+
+    assert {s.verdict for s in rows} == {"不合"}
+    assert {s.recommended_action for s in rows} == {"跟我聊聊调方向"}
+    assert all("我会把这场判成不合" in s.highlights[0]["text"] for s in rows)
+
+
 async def test_peer_block_is_injected_into_summary_system(
     db_session: AsyncSession,
     monkeypatch,

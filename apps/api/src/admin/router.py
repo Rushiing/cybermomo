@@ -132,6 +132,8 @@ async def _bg_run_agent_chat_user_sample(
     max_turns: int,
     avoid_previous: bool,
     force_clear_running: bool,
+    direction_hint: str | None,
+    direction_target_user_id: int | None,
 ) -> None:
     global _AGENT_CHAT_SAMPLE_RUNNING
     try:
@@ -193,6 +195,8 @@ async def _bg_run_agent_chat_user_sample(
                 match=match,
                 max_turns=max_turns,
                 avoid_topic_refs=avoid_topic_refs,
+                direction_hint=direction_hint,
+                direction_target_user_id=direction_target_user_id,
             )
             match.status = "agent_chat_done" if "done" in (chat.status or "") else "agent_chat_running"
             await db.commit()
@@ -424,6 +428,8 @@ async def agent_chat_run_user_sample(
     max_turns: int = 10,
     avoid_previous: bool = False,
     force_clear_running: bool = False,
+    direction_hint: Optional[str] = None,
+    direction_target_user_id: Optional[int] = None,
     x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
 ):
     """
@@ -443,6 +449,9 @@ async def agent_chat_run_user_sample(
         )
     if max_turns < 4 or max_turns > 14:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="max_turns 必须在 4..14")
+    target_user_id = direction_target_user_id
+    if direction_hint and target_user_id is None:
+        target_user_id = user_id
 
     _AGENT_CHAT_SAMPLE_RUNNING = True
     _reset_agent_chat_sample_state(user_id=user_id, match_id=match_id)
@@ -453,6 +462,8 @@ async def agent_chat_run_user_sample(
         max_turns=max_turns,
         avoid_previous=avoid_previous,
         force_clear_running=force_clear_running,
+        direction_hint=direction_hint,
+        direction_target_user_id=target_user_id,
     )
     return {
         "ok": True,

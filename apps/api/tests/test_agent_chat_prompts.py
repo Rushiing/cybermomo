@@ -468,6 +468,68 @@ async def test_topic_strategy_bridges_to_second_confirmation_late_chat(
     assert "升温验证" not in prompt
 
 
+async def test_topic_strategy_surfaces_mismatch_instead_of_rescuing(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    match, user_a, user_b = await _create_match_bundle(db_session)
+    chat = AgentChat(match_id=match.id, status="running")
+    db_session.add(chat)
+    await db_session.commit()
+    await db_session.refresh(chat)
+    captured_prompts: list[str] = []
+
+    async def fake_llm_chat(*_args, **kwargs):
+        captured_prompts.append(kwargs["messages"][0].content)
+        return FakeLLMResp(_llm_payload(intent="deflect"))
+
+    history = [
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=1,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="你会喜欢临时被朋友拉去很吵的局吗？",
+            private_signals={"warmth_delta": 0, "topic_interest": 0},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_b.id,
+            turn=2,
+            topic_ref="topic_a",
+            intent="deflect",
+            utterance="这个我不太在这，太吵的局我基本会避开。",
+            private_signals={"warmth_delta": -1, "topic_interest": -1},
+        ),
+        AgentChatMessage(
+            speaker_user_id=user_a.id,
+            turn=3,
+            topic_ref="topic_a",
+            intent="probe",
+            utterance="那如果只是熟人攒的局，你会不会给个面子？",
+            private_signals={"warmth_delta": -1, "topic_interest": -1},
+        ),
+    ]
+
+    monkeypatch.setattr("src.agent_chat.engine.llm_chat", fake_llm_chat)
+    await _ask_one_turn(
+        db_session,
+        chat=chat,
+        speaker_user_id=user_b.id,
+        turn_number=4,
+        max_turns=10,
+        md_profile_text="profile text",
+        hooks=(await db_session.execute(select(MatchHook))).scalars().all(),
+        history=history,
+        avoid_topic_refs=[],
+    )
+
+    prompt = captured_prompts[0]
+    assert "降温确认" in prompt
+    assert "不要继续礼貌救场" in prompt
+    assert "不合适说得可被宿主看见" in prompt
+    assert "intent 优先用 deflect/reject/wrap" in prompt
+
+
 async def test_topic_strategy_nudges_mid_chat_coverage(
     db_session: AsyncSession,
     monkeypatch,

@@ -82,6 +82,7 @@ _QUESTION_HINTS = (
     "什么",
 )
 _COOL_DOWN_INTENTS = {"deflect", "reject", "wrap"}
+_MISMATCH_BOUNDARIES = {"价值观", "隐私", "铁律"}
 
 
 # ========================================
@@ -413,6 +414,31 @@ def _positive_private_signal(message: AgentChatMessage) -> bool:
     return private.get("warmth_delta") == 1 or private.get("topic_interest") == 1
 
 
+def _negative_private_signal(message: AgentChatMessage) -> bool:
+    private = message.private_signals or {}
+    return (
+        private.get("warmth_delta") == -1
+        or private.get("topic_interest") == -1
+        or private.get("boundary_hit") in _MISMATCH_BOUNDARIES
+    )
+
+
+def _has_mismatch_candidate(messages: list[AgentChatMessage]) -> bool:
+    if len(messages) < 3:
+        return False
+    recent = messages[-4:]
+    recent_intents = {str(msg.intent or "") for msg in recent}
+    if recent_intents & {"reject"}:
+        return True
+    if sum(1 for msg in recent if str(msg.intent or "") == "deflect") >= 2:
+        return True
+    if sum(1 for msg in recent if _negative_private_signal(msg)) >= 2:
+        return True
+    if any((msg.private_signals or {}).get("boundary_hit") in _MISMATCH_BOUNDARIES for msg in messages[-2:]):
+        return True
+    return False
+
+
 def _has_bidirectional_spark_candidate(
     messages: list[AgentChatMessage],
     current_topic: str,
@@ -467,6 +493,7 @@ def _build_topic_strategy_block(
     used_topics = _used_topic_refs(messages)
     used_set = set(used_topics)
     current_topic, streak = _current_topic_streak(messages)
+    has_mismatch_candidate = _has_mismatch_candidate(messages)
     has_spark_candidate = _has_bidirectional_spark_candidate(
         messages,
         current_topic,
@@ -491,7 +518,17 @@ def _build_topic_strategy_block(
         if current_topic:
             lines.append(f"- 当前话题 {current_topic} 已连续 {streak} 轮。")
 
-    if needs_second_confirmation:
+    if has_mismatch_candidate:
+        lines.append(
+            "- 降温确认: 已经出现低兴趣/回避/边界信号，本轮不要继续礼貌救场，"
+            "也不要硬换话题制造热度。"
+        )
+        lines.append(
+            "- 把不合适说得可被宿主看见: 明确指出“这个点我不太在这/这个节奏我接不住/这里可能不合”，"
+            "最多补一个具体原因。intent 优先用 deflect/reject/wrap。"
+        )
+        lines.append("- 如果只是轻微不合，用 deflect 后收束；如果价值观或边界明显不合，用 reject。")
+    elif needs_second_confirmation:
         lines.append(
             f"- 二次确认: {current_topic} 已经有来电候选证据，本轮不要继续把同一点聊到底。"
             "先承接上一句，再轻轻桥到第二个证据面，验证这种顺是否能换场景成立。"
@@ -540,7 +577,11 @@ def _build_topic_strategy_block(
         lacks_second_topic = len(used_topics) < 2
         lacks_coverage = not _has_coverage_topic(messages, hooks)
         if lacks_second_topic or lacks_coverage:
-            if needs_second_confirmation:
+            if has_mismatch_candidate:
+                lines.append(
+                    "- 中段补证据: 不要为了补覆盖而继续发散；先把当前不合适的点讲清楚。"
+                )
+            elif needs_second_confirmation:
                 lines.append(
                     "- 中段补证据: 用第二个小场景补边界 / 生活节奏 / 真实摩擦信息；"
                     "不要只靠单一长话题支撑来电。"
