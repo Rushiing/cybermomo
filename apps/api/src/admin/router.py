@@ -29,7 +29,7 @@ from src.agent_chat.engine import run_agent_chat
 from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.agent_self.backfill import backfill_all
 from src.agent_self.revisit import seed_revisit_after_silent_sweep
-from src.auth.models import User
+from src.auth.models import User, UserProfile
 from src.human_chat.models import ChatSession
 from src.human_chat.observation import run_observation_for_session
 from src.match.models import Match, MatchHook
@@ -563,6 +563,121 @@ async def agent_chat_latest_user_sample(
                 ],
             })
         return {"ok": True, "user_id": user_id, "results": results}
+
+
+@router.get("/agent-chat/candidates/{user_id}")
+async def agent_chat_candidates(
+    user_id: int,
+    limit: int = 20,
+    order: str = "lowest",
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """列出某 user 可用于 Agent 互聊采样的候选 match,只读调试用。"""
+    _require_admin(x_admin_secret)
+    if limit < 1 or limit > 50:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="limit 必须在 1..50")
+    if order not in {"lowest", "highest"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="order 必须是 lowest/highest")
+
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="user not found")
+
+        order_by = (
+            (Match.overall_score.asc(), Match.id.desc())
+            if order == "lowest"
+            else (Match.overall_score.desc(), Match.id.desc())
+        )
+        matches = (await db.execute(
+            select(Match)
+            .where(or_(Match.user_a_id == user_id, Match.user_b_id == user_id))
+            .where(
+                select(func.count())
+                .select_from(MatchHook)
+                .where(MatchHook.match_id == Match.id)
+                .scalar_subquery() > 0
+            )
+            .order_by(*order_by)
+            .limit(limit)
+        )).scalars().all()
+
+        results: list[dict] = []
+        for match in matches:
+            peer_user_id = match.user_b_id if match.user_a_id == user_id else match.user_a_id
+            peer = (await db.execute(select(User).where(User.id == peer_user_id))).scalar_one_or_none()
+            peer_profile = (await db.execute(
+                select(UserProfile).where(UserProfile.user_id == peer_user_id)
+            )).scalar_one_or_none()
+            hooks = (await db.execute(
+                select(MatchHook)
+                .where(MatchHook.match_id == match.id)
+                .order_by(MatchHook.target_user_id, MatchHook.id)
+            )).scalars().all()
+            latest_chat = (await db.execute(
+                select(AgentChat)
+                .where(AgentChat.match_id == match.id)
+                .order_by(AgentChat.id.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            latest_summary = None
+            if latest_chat is not None:
+                latest_summary = (await db.execute(
+                    select(Summary)
+                    .where(
+                        Summary.agent_chat_id == latest_chat.id,
+                        Summary.host_user_id == user_id,
+                        Summary.summary_type == "agent_chat",
+                    )
+                    .limit(1)
+                )).scalar_one_or_none()
+
+            results.append({
+                "match_id": match.id,
+                "overall_score": float(match.overall_score),
+                "status": match.status,
+                "peer_user_id": peer_user_id,
+                "peer_username": None if peer is None else peer.username,
+                "peer_nickname": None if peer_profile is None else peer_profile.nickname,
+                "peer_is_system_mock": None if peer is None else peer.is_system_mock,
+                "latest_agent_chat": None if latest_chat is None else {
+                    "id": latest_chat.id,
+                    "status": latest_chat.status,
+                    "end_reason": latest_chat.end_reason,
+                    "verdict": None if latest_summary is None else latest_summary.verdict,
+                    "recommended_action": (
+                        None if latest_summary is None else latest_summary.recommended_action
+                    ),
+                },
+                "hooks_for_user": [
+                    {
+                        "topic_id": hook.topic_id,
+                        "category": hook.category,
+                        "match_type": hook.match_type,
+                        "hook_text": hook.hook_text,
+                    }
+                    for hook in hooks
+                    if hook.target_user_id == user_id
+                ],
+                "hooks_for_peer": [
+                    {
+                        "topic_id": hook.topic_id,
+                        "category": hook.category,
+                        "match_type": hook.match_type,
+                        "hook_text": hook.hook_text,
+                    }
+                    for hook in hooks
+                    if hook.target_user_id == peer_user_id
+                ],
+            })
+
+        return {
+            "ok": True,
+            "user_id": user_id,
+            "limit": limit,
+            "order": order,
+            "results": results,
+        }
 
 
 @router.post("/backfill-embeddings")
