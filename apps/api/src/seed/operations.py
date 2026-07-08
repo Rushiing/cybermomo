@@ -160,6 +160,69 @@ async def insert_all_mock_users(
     }
 
 
+_CLEAN_NICKNAME_POOL = [
+    "南序", "青岑", "知野", "林止", "澄川", "一禾", "若庭", "云屏", "松弦", "白栖",
+    "岑夏", "临溪", "明砚", "北禾", "予安", "闻舟", "照晚", "宁川", "如栖", "山月",
+    "川柏", "素笺", "予乔", "晴山", "时屿", "映河", "远白", "清岚", "念初", "微澜",
+]
+
+
+def _obvious_mock_nickname(nickname: str | None) -> bool:
+    text = (nickname or "").strip()
+    lowered = text.lower()
+    return (
+        "mock" in lowered
+        or "test" in lowered
+        or "测试" in text
+        or lowered.startswith("user_")
+    )
+
+
+async def cleanup_obvious_mock_nicknames(*, dry_run: bool = True) -> dict[str, Any]:
+    """把明显带 mock/test/测试/user_ 的展示昵称换成自然昵称。"""
+    async with SessionLocal() as db:
+        rows = (await db.execute(
+            select(User, UserProfile)
+            .join(UserProfile, UserProfile.user_id == User.id)
+            .order_by(User.id)
+        )).all()
+
+        existing_nicknames = {
+            str(profile.nickname).strip()
+            for _, profile in rows
+            if profile.nickname and not _obvious_mock_nickname(profile.nickname)
+        }
+        pool_iter = iter([n for n in _CLEAN_NICKNAME_POOL if n not in existing_nicknames])
+        changes: list[dict[str, Any]] = []
+
+        for user, profile in rows:
+            if not _obvious_mock_nickname(profile.nickname):
+                continue
+            try:
+                new_nickname = next(pool_iter)
+            except StopIteration:
+                new_nickname = f"临山{len(changes) + 1}"
+            changes.append({
+                "user_id": user.id,
+                "username": user.username,
+                "is_system_mock": user.is_system_mock,
+                "old_nickname": profile.nickname,
+                "new_nickname": new_nickname,
+            })
+            if not dry_run:
+                profile.nickname = new_nickname
+
+        if not dry_run:
+            await db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "changed_count": len(changes),
+        "changes": changes,
+    }
+
+
 # ========================================
 # Pipeline 跑(异步 · BackgroundTask 调用)
 # ========================================

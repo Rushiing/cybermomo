@@ -1,5 +1,5 @@
 """
-冷启动 mock 用户档案池 · 8 骨架 × 2-3 variant = 20 人
+冷启动 mock 用户档案池 · 8 骨架 × 10 variant = 80 人
 
 每个 archetype 是一对(demographic, base profile),variants 只改:
   - nickname
@@ -7,7 +7,7 @@
   - dialogue / boundary 数值小幅偏移(±15)
 
 被 scripts/cold_start_seed.py 消费。也可以单独跑:
-    python3 scripts/mock_user_archetypes.py   # 打印 20 人摘要
+    python3 scripts/mock_user_archetypes.py   # 打印 mock 用户摘要
 
 骨架表(跟 plan binary-prancing-candle.md 对齐):
   A 沉静观察者     25-30 / female  / INFJ — 慢热高披露 · 阅读+心理
@@ -19,7 +19,7 @@
   G 中年沉淀       40+   / female  / ISFJ — 慢节奏 + 关怀 · 家庭+读书
   H 文艺学生       18-25 / female  / ENFJ — 共情型 · 写作+音乐
 
-总 20 人:A×3, B×3, C×3, D×3, E×2, F×2, G×2, H×2
+总 80 人:A-H 各 10 人
 """
 from __future__ import annotations
 
@@ -400,9 +400,96 @@ MOCK_USERS += [
 # 校验 + 导出
 # ========================================
 
-assert len(MOCK_USERS) == 20, f"expected 20 mock users, got {len(MOCK_USERS)}"
+_TARGET_PER_ARCHETYPE = 10
+_EXTRA_NAMES = {
+    "A": [
+        ("qingzhu", "青竹"), ("ruoye", "若野"), ("zhixia", "知夏"), ("shisu", "时素"),
+        ("linjian", "林间"), ("xiaoyin", "小隐"), ("yueba", "月白"),
+    ],
+    "B": [
+        ("yefan", "野帆"), ("lumo", "鹿墨"), ("xingchi", "星驰"), ("qiaomu", "乔木"),
+        ("beichen", "北辰"), ("shangqi", "尚祺"), ("kaifeng", "开风"),
+    ],
+    "C": [
+        ("yanxu", "岩序"), ("weizhou", "微舟"), ("qingheng", "青衡"), ("mubian", "木边"),
+        ("chisu", "迟肃"), ("hanzhi", "寒枝"), ("shenke", "深刻"),
+    ],
+    "D": [
+        ("lianqing", "练青"), ("songzhi", "松直"), ("qingli", "晴立"), ("yanjie", "言洁"),
+        ("shanhe", "山禾"), ("mingzhi", "明执"), ("lanqiao", "岚桥"),
+    ],
+    "E": [
+        ("moxia", "墨夏"), ("ninghe", "宁禾"), ("yishe", "一舍"), ("qinglan", "晴岚"),
+        ("suye", "素野"), ("runan", "如南"), ("yunci", "云瓷"), ("linwan", "林晚"),
+    ],
+    "F": [
+        ("axun", "阿迅"), ("leihuo", "雷火"), ("xiaoman", "小满"), ("xingye", "星野"),
+        ("yoyo", "悠游"), ("chitu", "赤土"), ("paopao", "泡泡"), ("feiche", "飞澈"),
+    ],
+    "G": [
+        ("suwan", "素晚"), ("heyan", "禾言"), ("rongshu", "榕书"), ("qingping", "清平"),
+        ("wanqing", "晚晴"), ("nanzhi", "南枝"), ("youlan", "有兰"), ("huanshi", "缓时"),
+    ],
+    "H": [
+        ("yingge", "映歌"), ("xiaoyao", "小遥"), ("yiran", "以然"), ("shiqi", "时柒"),
+        ("linlu", "林露"), ("mianshu", "棉书"), ("qingge", "晴歌"), ("taoye", "桃野"),
+    ],
+}
+_BASE_BY_LETTER = {
+    "A": _A_BASE,
+    "B": _B_BASE,
+    "C": _C_BASE,
+    "D": _D_BASE,
+    "E": _E_BASE,
+    "F": _F_BASE,
+    "G": _G_BASE,
+    "H": _H_BASE,
+}
+_DOMAIN_ROTATIONS = [
+    (["AI与科技", "心理与人类观察", "文学写作"], ["体育赛事", "神秘学与命理"]),
+    (["商业财经", "旅行城市", "生活方式"], ["二次元动漫", "神秘学与命理"]),
+    (["音乐演出", "影视综艺", "情感关系"], ["时政公共议题", "体育赛事"]),
+    (["历史社科", "教育学习", "心理与人类观察"], ["游戏", "时尚形象"]),
+    (["设计审美", "家居美食", "生活方式"], ["商业财经", "时政公共议题"]),
+    (["游戏", "二次元动漫", "音乐演出"], ["历史社科", "时政公共议题"]),
+    (["健身运动", "旅行城市", "家居美食"], ["神秘学与命理", "二次元动漫"]),
+    (["文学写作", "设计审美", "影视综艺"], ["体育赛事", "商业财经"]),
+]
+_DELTAS = (-10, -5, 0, 5, 10, -8, 8, 3)
+
+
+def _extend_mock_users_to_target() -> None:
+    for letter, base in _BASE_BY_LETTER.items():
+        existing = [u for u in MOCK_USERS if str(u["archetype"]).startswith(letter)]
+        needed = _TARGET_PER_ARCHETYPE - len(existing)
+        if needed <= 0:
+            continue
+        names = _EXTRA_NAMES[letter]
+        assert len(names) >= needed, f"not enough extra names for archetype {letter}"
+        start_index = len(existing) + 1
+        for offset, (slug, nickname) in enumerate(names[:needed]):
+            domains, avoided = _DOMAIN_ROTATIONS[(offset + start_index) % len(_DOMAIN_ROTATIONS)]
+            delta = _DELTAS[offset % len(_DELTAS)]
+            MOCK_USERS.append({
+                **base,
+                "username": f"mock_{slug}_{letter.lower()}{start_index + offset}",
+                "nickname": nickname,
+                "domains_interested": domains,
+                "domains_avoided": avoided,
+                "dialogue": _shift(base["dialogue"], delta),
+                "boundary": _shift(base["boundary"], -delta),
+                "reliability": _shift(base["reliability"], delta // 2),
+                "conflict": _shift(base["conflict"], -delta // 2),
+                "exploration": _shift(base["exploration"], delta),
+                "agency": _shift(base["agency"], -delta),
+            })
+
+
+_extend_mock_users_to_target()
+
+assert len(MOCK_USERS) == 80, f"expected 80 mock users, got {len(MOCK_USERS)}"
 _usernames = [u["username"] for u in MOCK_USERS]
-assert len(set(_usernames)) == 20, "duplicate username detected"
+assert len(set(_usernames)) == len(MOCK_USERS), "duplicate username detected"
 for u in MOCK_USERS:
     assert u["username"].startswith("mock_"), f"username must start with mock_: {u['username']}"
     for required in ("nickname", "age_band", "gender", "mbti",

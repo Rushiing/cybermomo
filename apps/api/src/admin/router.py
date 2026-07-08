@@ -4,7 +4,8 @@ Admin API · 给外部 cron / 一次性 ops 调用,需要 X-Admin-Secret 头
 - POST /api/admin/observation-sweep        24h 沉默自动结束 + 观察报告
 - POST /api/admin/rerun-pipeline/{uid}     给某 user_id 重跑完整 pipeline(debug)
 - POST /api/admin/backfill-embeddings      回填存量 md_segments / summaries 的 embedding(幂等)
-- POST /api/admin/seed/insert              冷启动 · 插 20 mock 用户(同步,几秒)
+- POST /api/admin/seed/insert              冷启动 · 插 80 mock 用户(同步,几秒)
+- POST /api/admin/seed/cleanup-nicknames   订正明显 mock/test 展示昵称
 - POST /api/admin/seed/run-pipeline        冷启动 · BackgroundTask 跑 mock pipeline
 - GET  /api/admin/seed/status              冷启动 · 看 pipeline 进度
 - GET  /api/admin/seed/verify              冷启动 · 只读校验 mock pool 数据
@@ -18,6 +19,7 @@ Railway Cron Jobs 配置示例(observation sweep · 每小时):
    curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
         https://cybermomo-production.up.railway.app/api/admin/observation-sweep
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional
 
@@ -39,6 +41,7 @@ from src.match.pipeline import (
     run_full_pipeline_for_user,
 )
 from src.seed.operations import (
+    cleanup_obvious_mock_nicknames,
     get_pipeline_job_state,
     get_redo_summaries_job_state,
     insert_all_mock_users,
@@ -104,6 +107,7 @@ _MISMATCH_SAMPLE_HINT = (
     "测试不合：不要救场。围绕休息方式、正事/娱乐、效率/随机、聊天频率探差异；"
     "连续两次接不住就说：这个点我不太在这/这个节奏我接不住/可能不太合，然后 deflect 或 wrap。"
 )
+_AGENT_CHAT_BATCH_CHAT_TIMEOUT_SECONDS = 15 * 60
 
 
 def _require_admin(secret: Optional[str]) -> None:
@@ -384,13 +388,16 @@ async def _bg_run_agent_chat_sample_batch(
                         direction_hint = _MISMATCH_SAMPLE_HINT
                         direction_target_user_id = 0
 
-                    chat = await run_agent_chat(
-                        db,
-                        match=match,
-                        max_turns=max_turns,
-                        avoid_topic_refs=avoid_topic_refs,
-                        direction_hint=direction_hint,
-                        direction_target_user_id=direction_target_user_id,
+                    chat = await asyncio.wait_for(
+                        run_agent_chat(
+                            db,
+                            match=match,
+                            max_turns=max_turns,
+                            avoid_topic_refs=avoid_topic_refs,
+                            direction_hint=direction_hint,
+                            direction_target_user_id=direction_target_user_id,
+                        ),
+                        timeout=_AGENT_CHAT_BATCH_CHAT_TIMEOUT_SECONDS,
                     )
                     match.status = (
                         "agent_chat_done"
@@ -410,6 +417,19 @@ async def _bg_run_agent_chat_sample_batch(
                         "verdicts": [s.verdict for s in summaries],
                     })
                 except Exception as e:
+                    await db.rollback()
+                    if isinstance(e, TimeoutError):
+                        now = datetime.now(timezone.utc)
+                        running_chats = (await db.execute(
+                            select(AgentChat)
+                            .where(AgentChat.match_id == match.id, AgentChat.status == "running")
+                        )).scalars().all()
+                        for stale in running_chats:
+                            stale.status = "done_terminated"
+                            stale.end_reason = "sample_timeout"
+                            stale.ended_at = now
+                        if running_chats:
+                            await db.commit()
                     _AGENT_CHAT_BATCH_STATE["errors"].append({
                         "mode": mode,
                         "match_id": match.id,
@@ -1086,6 +1106,22 @@ async def seed_insert_users(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"seed insert 失败: {type(e).__name__}: {e}",
+        )
+
+
+@router.post("/seed/cleanup-nicknames")
+async def seed_cleanup_nicknames(
+    dry_run: bool = True,
+    x_admin_secret: Annotated[Optional[str], Header(alias="X-Admin-Secret")] = None,
+):
+    """订正线上明显带 mock/test/测试/user_ 的展示昵称。"""
+    _require_admin(x_admin_secret)
+    try:
+        return await cleanup_obvious_mock_nicknames(dry_run=dry_run)
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"cleanup nicknames 失败: {type(e).__name__}: {e}",
         )
 
 
