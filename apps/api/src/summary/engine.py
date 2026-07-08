@@ -167,6 +167,27 @@ _VISIBLE_MISMATCH_PHRASES = (
     "别聊",
 )
 _MISMATCH_BOUNDARIES = {"价值观", "隐私", "铁律"}
+_MISMATCH_DIRECT_ANCHORS = (
+    "你",
+    "咱俩",
+    "我们俩",
+    "这场",
+    "这轮",
+    "这个节奏",
+    "这个点",
+    "这段",
+    "这个话题",
+    "你刚才",
+)
+_MISMATCH_HYPOTHETICAL_ANCHORS = (
+    "有一类",
+    "一类人",
+    "那种人",
+    "这种人",
+    "这类人",
+    "如果对方",
+    "有人",
+)
 
 
 def _text_len(text: str) -> int:
@@ -214,9 +235,28 @@ def _visible_mismatch_message(messages: list[AgentChatMessage]) -> AgentChatMess
             return msg
         if private.get("boundary_hit") in _MISMATCH_BOUNDARIES:
             return msg
-        if any(phrase in text for phrase in _VISIBLE_MISMATCH_PHRASES):
+        if _has_direct_visible_mismatch(text):
             return msg
     return None
+
+
+def _has_direct_visible_mismatch(text: str) -> bool:
+    hit_positions = [
+        text.find(phrase)
+        for phrase in _VISIBLE_MISMATCH_PHRASES
+        if phrase in text
+    ]
+    if not hit_positions:
+        return False
+
+    for pos in hit_positions:
+        before = text[max(0, pos - 16):pos]
+        around = text[max(0, pos - 18):pos + 18]
+        if any(anchor in before for anchor in _MISMATCH_HYPOTHETICAL_ANCHORS):
+            continue
+        if any(anchor in around for anchor in _MISMATCH_DIRECT_ANCHORS):
+            return True
+    return False
 
 
 def _strong_mismatch_reason(

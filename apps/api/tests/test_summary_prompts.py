@@ -301,6 +301,91 @@ async def test_laidian_allowed_when_transcript_has_visible_bidirectional_push(
     assert {s.recommended_action for s in rows} == {"开真人聊天"}
 
 
+async def test_hypothetical_mismatch_phrase_does_not_force_buhe(
+    db_session: AsyncSession,
+    monkeypatch,
+):
+    chat, user_a, user_b = await _create_summary_bundle(db_session, with_messages=False)
+    db_session.add_all(
+        [
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=1,
+                topic_ref="dating_pace",
+                intent="probe",
+                utterance="你说看关系推进会先看真实选择，具体会问到哪一层？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=2,
+                topic_ref="dating_pace",
+                intent="share",
+                utterance="我会先问对方怎么安排周末，不看口号。有一类人会聊不下去，但你这个问题挺对路。",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=3,
+                topic_ref="dating_pace",
+                intent="share",
+                utterance="这点我接得住，我也会看人是不是把时间给真实关系，而不是只讲自己多独立。",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=4,
+                topic_ref="dating_pace",
+                intent="probe",
+                utterance="那如果一个人临时改计划，你会直接降温，还是先看他有没有解释和补偿？",
+                public_signals={"intent": "probe"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_a.id,
+                turn=5,
+                topic_ref="dating_pace",
+                intent="share",
+                utterance="我会先看解释是不是具体，能把下一次安排补上，我反而会觉得这个人靠谱。",
+                public_signals={"intent": "share"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+            AgentChatMessage(
+                agent_chat_id=chat.id,
+                speaker_user_id=user_b.id,
+                turn=6,
+                topic_ref="dating_pace",
+                intent="align",
+                utterance="这波挺顺，名单上可以留个位。你不是要确定感，而是要看人有没有行动。",
+                public_signals={"intent": "align"},
+                private_signals={"warmth_delta": 1, "topic_interest": 1},
+            ),
+        ]
+    )
+    await db_session.commit()
+    monkeypatch.setattr(
+        "src.summary.engine.llm_chat",
+        AsyncMock(return_value=FakeLLMResp(_summary_payload(
+            verdict="来电",
+            recommended_action="开真人聊天",
+        ))),
+    )
+
+    await run_summary_for_chat(db_session, chat=chat)
+    rows = (await db_session.execute(select(Summary))).scalars().all()
+
+    assert {s.verdict for s in rows} == {"来电"}
+    assert {s.recommended_action for s in rows} == {"开真人聊天"}
+
+
 async def test_invalid_recommended_action_falls_back_to_redispatch(
     db_session: AsyncSession,
     monkeypatch,
