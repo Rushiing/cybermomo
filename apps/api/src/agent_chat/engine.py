@@ -691,10 +691,11 @@ async def run_agent_chat(
     for turn in range(1, max_turns + 1):
         speaker_user_id = speaker_order[(turn - 1) % 2]
         peer_user_id = speaker_order[turn % 2]  # 不是 speaker 的那个
-        # 只有 direction_target_user_id 那一侧的 Agent 拿到方向 hint;另一侧空
+        # 只有 direction_target_user_id 那一侧的 Agent 拿到方向 hint;另一侧空。
+        # admin 采样时 direction_target_user_id=0 表示双方都拿到同一方向。
         this_direction = (
             direction_hint
-            if direction_hint and speaker_user_id == direction_target_user_id
+            if direction_hint and direction_target_user_id in (0, speaker_user_id)
             else None
         )
         # peer demographic block(给 speaker Agent 看对方是谁)
@@ -828,6 +829,13 @@ async def _ask_one_turn(
             "\n【宿主新方向指示】（刚跟你私下聊过，这场互聊请尤其往这个方向探）\n"
             f"  > {direction_hint.strip()[:500]}\n"
         )
+        if "不合" in direction_hint:
+            direction_block += (
+                "\n【不合采样约束】\n"
+                "- 这不是让你表演吵架；但如果真实偏好差异已经出现，不要自动翻译成同频。\n"
+                "- 连续两次接不住时，直接把降温说出来：这个点我不太在这 / 这个节奏我接不住 / 可能不太合。\n"
+                "- 不要用“也挺好”“那挺稳的”把明显差异抹平；intent 优先用 deflect/reject/wrap。\n"
+            )
 
     user_payload = TURN_PROMPT_TEMPLATE.format(
         md_profile=md_profile_text,
