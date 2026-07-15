@@ -8,14 +8,8 @@ on:
         required: true
         default: main
       affected_services:
-        description: Railway services affected by this release
+        description: Exact affected services, for example frontend + backend + cron
         required: true
-        type: choice
-        options:
-          - frontend
-          - backend
-          - frontend + backend
-          - none (verification only)
       railway_evidence:
         description: Railway deployment ID(s) or dashboard evidence reference
         required: true
