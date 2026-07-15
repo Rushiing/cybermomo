@@ -163,7 +163,7 @@ git config user.email "codex@cybermomo.local"
 | `apps/api/tests/` | **CodeX 主场**(已建) | 新增行为优先补稳定、便宜、可重复的 test |
 | `apps/web/components/` | 共用 | 设计 token 必须走 Tailwind config |
 | `apps/web/app/` | 共用 | 整页改动过用户 |
-| `scripts/` | 共用 | 写完即弃,不维护 |
+| `scripts/` | 共用 | seeder/ops 工具；进入交付主流程的脚本必须有稳定测试 |
 | `legacy/` | **不动** | — |
 
 ---
@@ -172,7 +172,8 @@ git config user.email "codex@cybermomo.local"
 
 - 任务边界、风险分级、分支/worktree、本地验证、PR、Railway 和线上验收统一按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 执行。
 - 低/中/高风险定义以 runbook 为准。登录/OAuth、生产数据、migration、Agent/Summary 核心 Prompt、Voice Audit 写入、单轮/批量重跑、admin 权限是高风险，必须人工确认。
-- CI 只跑稳定、便宜、可重复的 API 测试和 Web 检查。真实模型、真实账号和生产数据验收不进基础 CI。
+- CI 只跑稳定、便宜、可重复的任务/风险 gate、API 测试和 Web 检查。真实模型、真实账号和生产数据验收不进基础 CI。
+- merge 后使用 GitHub Actions 的 `Production smoke` 记录 Railway 证据并验证正式域名；真实账号、模型质量、Voice Audit 和生产写操作仍走人工确认。
 
 ---
 

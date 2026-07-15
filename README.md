@@ -117,6 +117,9 @@ exit / 24h 沉默       → observation Agent → 观察报告(Claude)
 cd apps/api && python -m pip install -r requirements-dev.txt && pytest tests/
 cd apps/web && npm ci --no-audit --no-fund --ignore-scripts && npm run typecheck && npm run lint && npm run build
 
+# 部署后只读验收（不选真实账号、不写生产数据）
+python3 scripts/production_smoke.py --check-oauth-redirect
+
 # 一键创建 3 个差异化 mock 用户(自动触发 pipeline)
 python scripts/seed_demo_users.py
 
