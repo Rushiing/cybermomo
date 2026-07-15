@@ -32,7 +32,7 @@ Web：
 
 ```bash
 cd apps/web
-npm ci --no-audit --no-fund
+npm ci --no-audit --no-fund --ignore-scripts
 npm run typecheck
 npm run lint
 NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build

@@ -115,7 +115,7 @@ exit / 24h 沉默       → observation Agent → 观察报告(Claude)
 ```bash
 # 稳定的基础验证（不调真实 LLM）
 cd apps/api && python -m pip install -r requirements-dev.txt && pytest tests/
-cd apps/web && npm ci --no-audit --no-fund && npm run typecheck && npm run lint && npm run build
+cd apps/web && npm ci --no-audit --no-fund --ignore-scripts && npm run typecheck && npm run lint && npm run build
 
 # 一键创建 3 个差异化 mock 用户(自动触发 pipeline)
 python scripts/seed_demo_users.py
