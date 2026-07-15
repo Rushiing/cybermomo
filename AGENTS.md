@@ -26,7 +26,7 @@
 
 **内测前加固(5 P0 全闭环)已全部完成、推上线、部署验证通过**(Batch 1 → 3.5b,codex 终审两轮判可上线)。现在在做"开真人内测前"的小 UX 打磨 + Rush 自己走 happy path 自测。
 
-- backend 域名是 `https://cybermomo-production.up.railway.app`，frontend 正式域名是 `https://cybermomo.up.railway.app`。上线状态不在文档中固定写 commit；每次交付按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 核对 GitHub merge commit、Railway 运行 commit 和正式域名行为。
+- backend 域名是 `https://cybermomo-production.up.railway.app`，frontend 正式域名是 `https://cybermomo-app.up.railway.app`。上线状态不在文档中固定写 commit；每次交付按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 核对 GitHub merge commit、Railway 运行 commit 和正式域名行为。
 - **内测 ops 三铁规矩 + 档 B 延后清单** 看 [`docs/beta-runbook.md`](docs/beta-runbook.md);审计报告看 [`docs/audit-2026-06.md`](docs/audit-2026-06.md)。
 
 **下一步**:happy path 自测 → 开 ~100 人陆续进的真人内测;继续小 UX 打磨(已知待办:互聊回放话题标签还显示 `matchpoint_3` 这种内部 id,待换人话)。

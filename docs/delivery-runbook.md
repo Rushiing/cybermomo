@@ -60,7 +60,7 @@ merge 后记录 merge commit、受影响服务、Railway deployment ID 与实际
 Railway 显示绿色不等于产品可用。至少验证：
 
 1. `https://cybermomo-production.up.railway.app/healthz` 返回 200。
-2. `https://cybermomo.up.railway.app/` 能打开并正常渲染。
+2. `https://cybermomo-app.up.railway.app/` 能打开并正常渲染。
 3. frontend 同域 `/api/auth/me` 能连到 backend，未登录时返回预期 401。
 4. 涉及用户路径时，用授权的测试账号验证实际页面行为。
 5. OAuth 任务必须验证 Google 跳转、callback、session、登出和新旧用户落地页。

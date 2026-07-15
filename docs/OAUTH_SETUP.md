@@ -22,7 +22,7 @@
    - Name: `cybermomo-prod`
    - **Authorized redirect URIs** 加:
      ```
-     https://cybermomo-production.up.railway.app/api/auth/google/callback
+     https://cybermomo-app.up.railway.app/api/auth/google/callback
      ```
      (如果还要本地开发,再加一行 `http://localhost:8080/api/auth/google/callback`)
    - 创建后会拿到 **Client ID** 和 **Client Secret** — 复制存好
@@ -35,8 +35,8 @@
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | `xxx.apps.googleusercontent.com` | 上一步拿到的 |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | `GOCSPX-xxx` | 上一步拿到的 |
-| `GOOGLE_OAUTH_REDIRECT_URI` | `https://cybermomo-production.up.railway.app/api/auth/google/callback` | 跟 Google Console 那行完全一致 |
-| `WEB_BASE_URL` | `https://cybermomo.up.railway.app` | 前端域名 |
+| `GOOGLE_OAUTH_REDIRECT_URI` | `https://cybermomo-app.up.railway.app/api/auth/google/callback` | 跟 Google Console 那行完全一致 |
+| `WEB_BASE_URL` | `https://cybermomo-app.up.railway.app` | 前端域名 |
 | `JWT_SECRET` | `openssl rand -hex 32` 生成 | **必填**,session JWT 签名密钥 |
 | `ENV` | `prod` | 关掉 dev mock fallback;cookie auth 唯一通路 |
 
@@ -53,7 +53,7 @@
 
 部署完后:
 
-- 浏览器访问 `https://cybermomo.up.railway.app/`
+- 浏览器访问 `https://cybermomo-app.up.railway.app/`
 - 应该看到"用 Google 登录"按钮**可点**(不再灰)、左下角 DEV banner **消失**
 - 点 Google 登录 → 跳到 Google 同意页 → 选账户 → 同意 → 跳回 `/room`(老用户)或 `/onboarding`(新用户)
 - 进 `/me` → 设置区 → "退出登录" 点两下 → 跳回 `/`,再访问 `/room` 应该 401 跳回登录页
