@@ -40,6 +40,8 @@ NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
 
 只运行与变更相关的额外检查。基础 CI 不调用真实 LLM、Google 真实账号、Railway 生产数据库或生产 admin endpoint。
 
+提交 `package-lock.json` 前检查 `resolved` 地址：仓库 lockfile 只能指向 `https://registry.npmjs.org/`，不得写入公司内网或个人 registry。
+
 ## 4. PR 与 merge
 
 1. PR 描述必须包含边界、风险、验证证据、Railway 影响面、线上验收清单。
