@@ -2,7 +2,12 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": [
+      "/apps/api/**",
+      "/Dockerfile",
+      "/railway.json"
+    ]
   },
   "deploy": {
     "// note": "alembic upgrade head 已经在 Dockerfile CMD 里;这里不再重复设 preDeployCommand,",
