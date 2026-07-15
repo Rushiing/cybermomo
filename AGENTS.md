@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> 2026-07-15 起，本项目统一以 `AGENTS.md` 作为 Codex 主入口。`CLAUDE.md` 是指向本文件的兼容入口；新增规则只写这里。
+
 > 给所有 AI 协作者(Claude / CodeX / 后来者)的 onboarding 文档。
 > 这是项目级共识,你写代码前必读;commit message 也按这里的约定写。
 > `CLAUDE.md` 是本文件的软链 — 改这一份两边同步。
@@ -12,19 +14,19 @@
 
 - **阶段**:MVP 内测前最后冲刺(2026-05-13)
 - **技术栈**:FastAPI(Python 3.11+ async)+ Next.js 14 App Router + Postgres 16 + pgvector + DashScope(OpenAI-compatible)LLM
-- **部署**:Railway 双 service(api + web)
+- **部署**:Railway backend + frontend + Postgres + observation sweep cron
 
 完整结构和本地启动看 `README.md`,不重复。
 
 ---
 
-## 2. 当前节点(2026-06-26)
+## 2. 当前节点(2026-07-15)
 
 > 📍 **最新进展 + 无缝衔接,读 [`docs/handoff-2026-06-26.md`](docs/handoff-2026-06-26.md)** —— 本节是它的摘要。
 
 **内测前加固(5 P0 全闭环)已全部完成、推上线、部署验证通过**(Batch 1 → 3.5b,codex 终审两轮判可上线)。现在在做"开真人内测前"的小 UX 打磨 + Rush 自己走 happy path 自测。
 
-- 线上 `https://cybermomo-production.up.railway.app`(`/healthz` → `{"ok":true}` 已验);`origin/main = ee748f0`,工作区干净、全部已推已部署。
+- backend 域名是 `https://cybermomo-production.up.railway.app`，frontend 正式域名是 `https://cybermomo.up.railway.app`。上线状态不在文档中固定写 commit；每次交付按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 核对 GitHub merge commit、Railway 运行 commit 和正式域名行为。
 - **内测 ops 三铁规矩 + 档 B 延后清单** 看 [`docs/beta-runbook.md`](docs/beta-runbook.md);审计报告看 [`docs/audit-2026-06.md`](docs/audit-2026-06.md)。
 
 **下一步**:happy path 自测 → 开 ~100 人陆续进的真人内测;继续小 UX 打磨(已知待办:互聊回放话题标签还显示 `matchpoint_3` 这种内部 id,待换人话)。
@@ -76,9 +78,7 @@
 
 ### 4.1 · 分支与发布
 
-**Claude 工作流**:直推 main(Mode A),用户在终端敲 `git push`。
-
-**CodeX 工作流**:走 PR。
+**所有 AI 协作工作流**:走 PR，不直推 main。
 1. 一个任务一个分支(`feat/codex-add-auth-tests` / `chore/codex-review-2c73f6a` 这种命名)
 2. push 分支后开 PR,标题 + 描述按本文档 §4.2 commit message 规范
 3. **PR 主审是 Claude**(`gh pr review --comment`)— 找 bug、对边界、查 7 条铁律
@@ -160,7 +160,7 @@ git config user.email "codex@cybermomo.local"
 | `apps/api/src/auth/` | 共用 | 改 schema 过用户 |
 | `apps/api/src/match/` `md/` | 共用 | — |
 | `apps/api/alembic/` | 共用 | 新 migration 不动旧的 |
-| `apps/api/tests/` | **CodeX 主场**(待建) | Claude 不主动写 test,除非用户要求 |
+| `apps/api/tests/` | **CodeX 主场**(已建) | 新增行为优先补稳定、便宜、可重复的 test |
 | `apps/web/components/` | 共用 | 设计 token 必须走 Tailwind config |
 | `apps/web/app/` | 共用 | 整页改动过用户 |
 | `scripts/` | 共用 | 写完即弃,不维护 |
@@ -168,34 +168,11 @@ git config user.email "codex@cybermomo.local"
 
 ---
 
-## 6. CodeX 当前可接的范围
+## 6. 标准交付入口
 
-新进项目,先从这 4 类活上手(按推荐顺序):
-
-### A. 写 `apps/api/tests/`(高优,最先做)
-- 现状:**没有 test**。MVP 阶段 prompt / endpoint 调整频繁,缺安全网
-- 目标:auth 模块(register / login / me / oauth callback)+ summary engine + agent_chat engine 的单测
-- 注意:LLM 必须 mock,**不要**真调 DashScope(浪费 quota)
-- 工程要求:async test(pytest-asyncio),SessionLocal 用 in-memory SQLite 或 testcontainers
-- 详细 brief:`docs/codex-onboarding.md`
-
-### B. Review 已合并 commit
-- 范围:`2fb8809` / `2c73f6a` / `bc67b32`(register 提速 / 头像上传 / MBTI 默认)
-- 形式:在 PR 形式不存在的情况下,写一份 review 报告(markdown)放 `docs/reviews/`
-- 关注:边界 case、安全(data URL 校验、密码 sha256+bcrypt 强度)、性能(selectinload 用对没)、与 7 条铁律的兼容性
-- 详细 brief:`docs/codex-onboarding.md`
-
-### C. 给 `mock_user_archetypes.py` 20 个 portrait_body 扩写到 100 字
-- 现状:每个 archetype 的 portrait_body 只有 2 句,人格不够立体
-- 要求:保持现有调性(朋友式八卦,不写成系统报告);每段 80-120 字;与 dialogue/boundary 数值一致
-- 边界:不引入新 demographic 字段;不改 archetype 类型
-- (等 A+B 跑完后开)
-
-### D. 给 `scripts/cold_start_seed.py` 加 `--verify` 子命令
-- 现状:跑完只能去 DB 手动 SELECT
-- 要求:新增 `python3 cold_start_seed.py --verify` 输出 mock user / agent_chat / summary 数量 + verdict 分布
-- 边界:只读,不改 seed 主流程
-- (等 A+B 跑完后开)
+- 任务边界、风险分级、分支/worktree、本地验证、PR、Railway 和线上验收统一按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 执行。
+- 低/中/高风险定义以 runbook 为准。登录/OAuth、生产数据、migration、Agent/Summary 核心 Prompt、Voice Audit 写入、单轮/批量重跑、admin 权限是高风险，必须人工确认。
+- CI 只跑稳定、便宜、可重复的 API 测试和 Web 检查。真实模型、真实账号和生产数据验收不进基础 CI。
 
 ---
 

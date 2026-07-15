@@ -63,13 +63,15 @@ open http://localhost:3000
 - Root Directory: `(repo root)`
 - Builder: Dockerfile
 - Postgres 插件:自动注入 `DATABASE_URL`(代码会自动归一为 asyncpg 格式)
-- preDeployCommand:`alembic upgrade head`
+- 容器启动时先运行 `alembic upgrade head`
 - 必填 Variables:`GLM_API_KEY` / `ANTHROPIC_API_KEY` / `JWT_SECRET` / `CORS_ORIGINS` / `ADMIN_SECRET`
+- Google OAuth:`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI=https://<web 域名>/api/auth/google/callback` / `WEB_BASE_URL=https://<web 域名>`
 
 ### service-web(独立 service · 前端)
 - Root Directory: `apps/web`
 - Builder: Dockerfile
 - 必填 Variables:`NEXT_PUBLIC_API_URL=https://<api 域名>`
+- 生产不要设置 `NEXT_PUBLIC_API_CLIENT_BASE`;浏览器走 web 同域 `/api`，由 Next rewrites 代理到 api service
 
 ### Cron Job(可选 · 每小时跑 24h 沉默 sweep)
 ```
@@ -111,6 +113,10 @@ exit / 24h 沉默       → observation Agent → 观察报告(Claude)
 ## 测试 / Seeder
 
 ```bash
+# 稳定的基础验证（不调真实 LLM）
+cd apps/api && python -m pip install -r requirements-dev.txt && pytest tests/
+cd apps/web && npm ci && npm run typecheck && npm run lint && npm run build
+
 # 一键创建 3 个差异化 mock 用户(自动触发 pipeline)
 python scripts/seed_demo_users.py
 
@@ -134,7 +140,6 @@ curl -H "X-Mock-User-Id: 1" https://<api 域名>/api/summary/me
 
 ## 还没做(都不阻塞 MVP 内测)
 
-- **OAuth 接入**(目前用 X-Mock-User-Id 头 + dev 自动 upsert)
 - **Prompt 入 prompt_versions 表**(目前 inline Python 字符串,后续 PE 阶段改 DB 驱动)
 - **图片上传**(真人聊天 content_type=image 暂时只能传 URL)
 - **structured logging**(目前 print)
