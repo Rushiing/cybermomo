@@ -1,0 +1,88 @@
+name: Production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref expected to be deployed
+        required: true
+        default: main
+      affected_services:
+        description: Railway services affected by this release
+        required: true
+        type: choice
+        options:
+          - frontend
+          - backend
+          - frontend + backend
+          - none (verification only)
+      railway_evidence:
+        description: Railway deployment ID(s) or dashboard evidence reference
+        required: true
+      check_oauth_redirect:
+        description: Verify Google redirect without selecting a real account
+        required: true
+        type: boolean
+        default: false
+      mobile_network_result:
+        description: Optional human result, for example 5G PASS or not required
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-smoke
+  cancel-in-progress: false
+
+jobs:
+  production-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run read-only production checks
+        run: |
+          oauth_flag=""
+          if [[ "${{ inputs.check_oauth_redirect }}" == "true" ]]; then
+            oauth_flag="--check-oauth-redirect"
+          fi
+          python scripts/production_smoke.py \
+            $oauth_flag \
+            --json-output production-smoke.json
+      - name: Record deployment evidence
+        if: always()
+        env:
+          AFFECTED_SERVICES: ${{ inputs.affected_services }}
+          RAILWAY_EVIDENCE: ${{ inputs.railway_evidence }}
+          MOBILE_NETWORK_RESULT: ${{ inputs.mobile_network_result }}
+        run: |
+          {
+            echo "## CyberMOMO production verification"
+            echo
+            echo "- Tested ref: \`${GITHUB_SHA}\`"
+            echo "- Affected services: ${AFFECTED_SERVICES}"
+            echo "- Railway evidence: ${RAILWAY_EVIDENCE}"
+            echo "- Mobile network: ${MOBILE_NETWORK_RESULT:-not recorded}"
+            echo "- Formal frontend: https://cybermomo-app.up.railway.app"
+            echo "- Formal backend: https://cybermomo-production.up.railway.app"
+            echo
+            if [[ -f production-smoke.json ]]; then
+              echo '```json'
+              cat production-smoke.json
+              echo '```'
+            else
+              echo "Smoke report was not produced. Inspect the failed step logs."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: production-smoke-${{ github.run_id }}
+          path: production-smoke.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -45,9 +45,11 @@ NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
 ## 4. PR 与 merge
 
 1. PR 描述必须包含边界、风险、验证证据、Railway 影响面、线上验收清单。
-2. `api-tests` 和 `web-checks` 是基础 required checks。
+2. `pr-risk-gate`、`api-tests` 和 `web-checks` 是基础 required checks。PR 必须填写三项任务边界且只能选择一个风险等级；高风险确认不完整时不能合并。
 3. 默认 squash merge；禁止直接 push main。
 4. 只有用户可以决定 merge。
+
+GitHub `main` 必须保持以下保护：只允许 PR 合入、三项基础检查 required、分支必须最新、conversation 必须解决、线性历史、禁止 force push 和删除。个人仓库不增加 CODEOWNERS 或强制 approve 数量；它们不能替代用户对中高风险任务的判断。
 
 ## 5. Railway 部署
 
@@ -68,8 +70,33 @@ Railway 显示绿色不等于产品可用。至少验证：
 
 真实模型效果、Voice Audit 和生产数据验收只能作为按需工作流或人工验收，不作为基础 CI gate。
 
+### 6.1 自动化只读 smoke
+
+本地或 CI 均使用同一脚本：
+
+```bash
+python3 scripts/production_smoke.py --check-oauth-redirect
+```
+
+脚本只验证 backend health、frontend HTML、同域 `/api/auth/me` 和可选的 Google redirect/state cookie，不选择真实账号、不调用真实模型、不写生产数据。
+
+merge 并确认 Railway 部署完成后，在 GitHub Actions 手动运行 `Production smoke`。输入受影响服务、Railway deployment ID 或 dashboard 证据引用；workflow summary 和 30 天 artifact 是该次发布的验收记录。脚本通过不等于 Railway commit 已匹配，运行人仍须先从 Railway 确认实际运行 commit。
+
+### 6.2 必须人工的验收
+
+- 登录/OAuth：真实账号 callback、session、登出、新旧用户落地页。
+- Agent Chat/Summary/核心 Prompt：授权测试账号 + 真实模型质量。
+- Voice Audit、单轮/批量重跑、生产数据/admin 写操作：动作前和执行前两次确认，并记录范围、恢复方案和结果。
+- 中国移动网络：确有可用性要求时由真人使用 4G/5G 验证，并把结果写入 workflow input 或 PR。
+
 ## 7. Truth sync 与清理
 
 验收通过后再同步 README、AGENTS.md、runbook 和必要的 Agent 记忆。记忆必须标明已验证的 commit/部署事实，不得包含 secret 或用户数据。
 
 用户确认任务完成后，再删除远程/本地分支、worktree 和临时资源；高风险任务保留必要的验收和回滚记录。
+
+## 8. 分阶段完成定义
+
+- Phase 1：任务边界、风险分级、独立分支/worktree、PR template 和基础 CI 已落地。
+- Phase 2：`main` 分支保护已启用，任务边界/风险 CI gate、required checks、人工 review、用户 merge 决策成为强制路径。
+- Phase 3：部署后只读 smoke、Railway 证据记录、真实账号/模型/生产数据人工门禁、truth-sync 和确认后清理形成闭环。

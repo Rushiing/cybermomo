@@ -13,6 +13,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pr-risk-gate:
+    name: pr-risk-gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python scripts/check_pr_risk.py --event-path "$GITHUB_EVENT_PATH"
+
   api-tests:
     name: api-tests
     runs-on: ubuntu-latest
@@ -30,6 +38,9 @@ jobs:
             apps/api/requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - run: pytest tests/
+      - name: Test delivery tooling
+        working-directory: .
+        run: python -m unittest discover -s scripts/tests
 
   web-checks:
     name: web-checks
