@@ -32,7 +32,7 @@ Web：
 
 ```bash
 cd apps/web
-npm ci
+npm ci --no-audit --no-fund
 npm run typecheck
 npm run lint
 NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
@@ -71,4 +71,3 @@ Railway 显示绿色不等于产品可用。至少验证：
 验收通过后再同步 README、AGENTS.md、runbook 和必要的 Agent 记忆。记忆必须标明已验证的 commit/部署事实，不得包含 secret 或用户数据。
 
 用户确认任务完成后，再删除远程/本地分支、worktree 和临时资源；高风险任务保留必要的验收和回滚记录。
-
