@@ -61,6 +61,14 @@ class PullRequestRiskGateTests(unittest.TestCase):
 """
         self.assertEqual(validate_pr_body(body), [])
 
+    def test_checked_marker_is_case_insensitive(self):
+        body = BOUNDARY + """
+- [X] 低：文档
+- [ ] 中：部署配置
+- [ ] 高：生产数据
+"""
+        self.assertEqual(validate_pr_body(body), [])
+
 
 if __name__ == "__main__":
     unittest.main()

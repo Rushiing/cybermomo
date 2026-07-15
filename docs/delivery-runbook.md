@@ -45,7 +45,7 @@ NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
 ## 4. PR 与 merge
 
 1. PR 描述必须包含边界、风险、验证证据、Railway 影响面、线上验收清单。
-2. `pr-risk-gate`、`api-tests` 和 `web-checks` 是基础 required checks。PR 必须填写三项任务边界且只能选择一个风险等级；高风险确认不完整时不能合并。
+2. `pr-risk-gate`、`api-tests` 和 `web-checks` 是基础 required checks。PR 必须填写三项任务边界且只能选择一个风险等级；高风险确认不完整时不能合并。PR 描述被编辑时必须重跑 gate，避免检查通过后改变风险声明。
 3. 默认 squash merge；禁止直接 push main。
 4. 只有用户可以决定 merge。
 
