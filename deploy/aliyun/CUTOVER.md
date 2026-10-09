@@ -1,15 +1,17 @@
 # CyberMOMO production cutover checklist
 
-Prepared 2026-10-09. This is a proposed operation, not a completed cutover.
+Authorized 2026-10-09. The user approved merge and production migration after replacing the model key. This is not a completed cutover.
 
-## Exact scope requiring production approval
+Pre-cutover checkpoint: new model key installed in the rehearsal runtime and inherited by the prepared `/opt/cybermomo-prod` private configuration; actual self-Agent SSE completed and both messages persisted. The independent production PostgreSQL volume is initialized but has not received the final source dump. Railway still serves traffic. DNS and deployment-trigger operations await stable browser control.
+
+## Authorized production scope
 
 - Before merging this PR, inspect and suspend automatic deploy triggers for the old Railway backend/frontend/cron. Record the previous settings. A merge must not automatically restart the old writer or interrupt a live background pipeline; if deploy triggers cannot be safely suspended, keep the PR draft until the exit sequence is agreed.
 - Railway CyberMOMO only: disable the `acceptable-mindfulness` 30-minute cron; stop old frontend/API writes after active background work drains. Keep Postgres, volume, deployment metadata and configuration for rollback.
 - Export a new PostgreSQL custom dump after the stop-write boundary. Fingerprint every public table with count and canonical full-row content; recheck source is static. The rehearsal dump is not a final migration source.
 - Deploy `/opt/cybermomo-prod` with independent Compose project/database volume. Stop only rehearsal frontend/API to release loopback ports 13010/13011; retain isolated databases/evidence. Never overwrite the production DB or a retained volume.
 - Restore to the new empty production DB with pg_restore --exit-on-error; verify source fingerprints before applying only the new email-claim migration. Verify original 24 tables unchanged except the expected Alembic version; users retain IDs, password hashes and all history links.
-- Configure WEB_BASE_URL/CORS for `https://cybermomo.daydreamer.world`, production authentication, original JWT/Google/model/admin settings and the validated SMTP bare sender address. Secrets stay private.
+- Configure WEB_BASE_URL/CORS for `https://cybermomo.daydreamer.world`, production authentication, original JWT/Google/model/admin settings, with the user-provided replacement model key and the validated SMTP bare sender address. Secrets stay private.
 - Add only the approved `cybermomo.daydreamer.world` application DNS record to Pre-RICH and the Caddy fragment. Validate Caddy config before reload; obtain a valid public certificate. Preserve all existing QuestionOS/NewRICH/MCP/personal preview routes.
 - Enable exactly one new observation scheduler only after old Railway cron is confirmed disabled and no old job remains. Install the prepared service/timer but do not enable it early.
 - Repoint `/opt/cybermomo-backup/backup.env` to `cybermomo-prod-postgres-1` / `cybermomo`; run production OSS backup plus download/full restore validation. Existing timer 04:35 Asia/Shanghai (+0–120 seconds jitter) currently backs up the rehearsal snapshot, not live Railway data.
