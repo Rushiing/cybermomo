@@ -138,6 +138,8 @@ export default function LoginScreen() {
 
         <p className="text-xs text-ink-tertiary text-center mt-3.5">
           没有账号?{" "}
+          <a href="/recover" className="text-primary-dark hover:underline underline-offset-2">找回旧 Google 账号</a>
+          <br />
           <a href="/signup" className="text-primary-dark hover:underline underline-offset-2">
             注册
           </a>

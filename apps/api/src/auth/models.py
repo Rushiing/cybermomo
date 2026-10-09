@@ -65,3 +65,15 @@ class UserProfile(Base):
     updated_at: Mapped[UpdatedAt]
 
     user: Mapped["User"] = relationship(back_populates="profile")
+
+
+class EmailAccountClaim(Base):
+    __tablename__ = "email_account_claims"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    send_count: Mapped[int] = mapped_column(nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

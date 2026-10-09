@@ -24,6 +24,7 @@ def _make_engine() -> AsyncEngine:
     return create_async_engine(
         settings.database_url,
         echo=settings.is_dev,
+        pool_pre_ping=True,  # Reconnect stale pooled connections after database maintenance.
         # 连接池:SSE 流式 endpoint + BackgroundTask LLM 都会长时间持有连接。
         # 关键约束 — 这是 **per-worker** 配置,uvicorn --workers N 时总连接数
         # = N × (pool_size + max_overflow)。Railway Postgres max_connections=100

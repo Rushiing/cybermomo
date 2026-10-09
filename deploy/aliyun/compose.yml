@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: ${CM_POSTGRES_IMAGE:?Use pinned PostgreSQL 18 + pgvector 0.8.2 image}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cybermomo
+      POSTGRES_DB: cybermomo
+      POSTGRES_PASSWORD: ${CM_POSTGRES_PASSWORD:?Required}
+    volumes: [postgres_data:/var/lib/postgresql]
+    networks: [data]
+    mem_limit: 384m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U cybermomo -d cybermomo']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  backend:
+    image: ${CM_BACKEND_IMAGE:?Required}
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    env_file: backend.env
+    command: [sh, -c, 'alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2']
+    ports: ['127.0.0.1:13011:8000']
+    networks: [app, data]
+    mem_limit: 768m
+    stop_grace_period: 600s
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz", timeout=5)']
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging: *logging
+  frontend:
+    image: ${CM_FRONTEND_IMAGE:?Required}
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
+    ports: ['127.0.0.1:13010:3000']
+    networks: [app]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3000/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging: *logging
+networks:
+  app: {}
+  data: {internal: true}
+volumes:
+  postgres_data: {}

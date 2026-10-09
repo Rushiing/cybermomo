@@ -85,3 +85,18 @@ class LoginRequest(BaseModel):
     """POST /api/auth/login"""
     username: str = Field(min_length=3, max_length=20)
     password: str = Field(min_length=1, max_length=100)
+
+
+class EmailClaimRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=200, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class EmailClaimConfirm(EmailClaimRequest):
+    token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    username: str = Field(min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
+    password: str = Field(min_length=8, max_length=100)
