@@ -12,11 +12,11 @@
 
 | 等级 | 范围 | 要求 |
 |---|---|---|
-| 低 | 文档、测试、不改行为的文案、只读脚本 | CI 全绿，用户确认后 merge |
-| 中 | 普通 UI/API、性能、依赖、部署配置 | CI 全绿 + 人工 review + 部署后 smoke |
-| 高 | 登录/OAuth、生产数据、migration、Agent/Summary 核心 Prompt、Voice Audit 写入、单轮/批量重跑、admin 权限 | 开工前确认；PR 中标记；merge/生产操作前再次人工确认；保留回滚路径 |
+| 低 | 文档、测试、不改行为的文案、只读脚本 | CI 全绿，在已授权交付范围内 merge |
+| 中 | 普通 UI/API、性能、依赖、部署配置 | CI 全绿 + review + 已授权部署后的 smoke |
+| 高 | 登录/OAuth、生产数据、migration、Agent/Summary 核心 Prompt、Voice Audit 写入、单轮/批量重跑、admin 权限 | 开工前确认；PR 中标记；merge/生产操作须有覆盖具体动作的用户授权；同一授权不重复申请；保留回滚路径 |
 
-AI 可以 review 和给出 merge 建议，不 approve、不自行 merge。高风险生产操作不得由 CI 自动执行。
+PR 不限定 Claude 主审；AI 可在用户授权范围内 review 和执行 merge，无需用户亲自点击。高风险生产操作不得由 CI 自动执行。
 
 ## 3. 本地验证
 
@@ -47,7 +47,7 @@ NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
 1. PR 描述必须包含边界、风险、验证证据、Railway 影响面、线上验收清单。
 2. `pr-risk-gate`、`api-tests` 和 `web-checks` 是基础 required checks。PR 必须填写三项任务边界且只能选择一个风险等级；高风险确认不完整时不能合并。PR 描述被编辑时必须重跑 gate，避免检查通过后改变风险声明。
 3. 默认 squash merge；禁止直接 push main。
-4. 只有用户可以决定 merge。
+4. 用户授权持续有效，范围未变时可由 Agent 执行 merge；不得将局部修复擅自扩大为合并或生产发布。
 
 GitHub `main` 必须保持以下保护：只允许 PR 合入、三项基础检查 required、分支必须最新、conversation 必须解决、线性历史、禁止 force push 和删除。个人仓库不增加 CODEOWNERS 或强制 approve 数量；它们不能替代用户对中高风险任务的判断。
 
@@ -100,5 +100,5 @@ merge 并确认 Railway 部署完成后，在 GitHub Actions 手动运行 `Produ
 ## 8. 分阶段完成定义
 
 - Phase 1：任务边界、风险分级、独立分支/worktree、PR template 和基础 CI 已落地。
-- Phase 2：`main` 分支保护已启用，任务边界/风险 CI gate、required checks、人工 review、用户 merge 决策成为强制路径。
+- Phase 2：`main` 分支保护已启用，任务边界/风险 CI gate、required checks、review、按用户授权执行 merge 成为交付路径。
 - Phase 3：部署后只读 smoke、Railway 证据记录、真实账号/模型/生产数据人工门禁、truth-sync 和确认后清理形成闭环。
