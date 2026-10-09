@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily CyberMOMO database backup
+
+[Timer]
+OnCalendar=*-*-* 04:35:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

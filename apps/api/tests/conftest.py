@@ -25,7 +25,7 @@ from sqlalchemy.pool import StaticPool
 from main import app
 from src.agent_chat.models import AgentChat, AgentChatMessage
 from src.agent_self.models import AgentConversation, AgentConversationMessage
-from src.auth.models import User, UserProfile
+from src.auth.models import User, UserProfile, EmailAccountClaim
 from src.auth.password import hash_password
 from src.auth.session import create_session_token
 from src.match.models import Match, MatchHook, Matchpoint
@@ -62,6 +62,7 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     async with engine.begin() as conn:
         await conn.run_sync(User.__table__.create)
         await conn.run_sync(UserProfile.__table__.create)
+        await conn.run_sync(EmailAccountClaim.__table__.create)
         await conn.run_sync(UserSoftBlocklist.__table__.create)
         await conn.run_sync(MdDocument.__table__.create)
         await conn.run_sync(Match.__table__.create)
@@ -91,6 +92,7 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await conn.run_sync(Match.__table__.drop)
         await conn.run_sync(MdDocument.__table__.drop)
         await conn.run_sync(UserSoftBlocklist.__table__.drop)
+        await conn.run_sync(EmailAccountClaim.__table__.drop)
         await conn.run_sync(UserProfile.__table__.drop)
         await conn.run_sync(User.__table__.drop)
     await engine.dispose()
@@ -111,6 +113,7 @@ async def clean_auth_tables(
         await session.execute(delete(Match))
         await session.execute(delete(MdDocument))
         await session.execute(delete(UserSoftBlocklist))
+        await session.execute(delete(EmailAccountClaim))
         await session.execute(delete(UserProfile))
         await session.execute(delete(User))
         await session.commit()
@@ -128,6 +131,7 @@ async def clean_auth_tables(
         await session.execute(delete(Match))
         await session.execute(delete(MdDocument))
         await session.execute(delete(UserSoftBlocklist))
+        await session.execute(delete(EmailAccountClaim))
         await session.execute(delete(UserProfile))
         await session.execute(delete(User))
         await session.commit()

@@ -1,0 +1,32 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:ListObjects"
+      ],
+      "Resource": [
+        "acs:oss:*:*:rushrich-backup-33407-20260713"
+      ],
+      "Condition": {
+        "StringLike": {
+          "oss:Prefix": [
+            "cybermomo/",
+            "cybermomo/*"
+          ]
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:PutObject",
+        "oss:GetObject"
+      ],
+      "Resource": [
+        "acs:oss:*:*:rushrich-backup-33407-20260713/cybermomo/*"
+      ]
+    }
+  ]
+}

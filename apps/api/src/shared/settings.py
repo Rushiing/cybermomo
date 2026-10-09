@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="")  # 备用,测试期不需要
     zhipu_api_key: str = Field(default="")
 
+    # Legacy Google account recovery mail
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_username: str = ""
+    smtp_password: str = ""
+    claim_mail_from: str = ""
+
     # Sentry
     sentry_dsn: str = Field(default="")
 

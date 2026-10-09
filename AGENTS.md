@@ -81,12 +81,11 @@
 **所有 AI 协作工作流**:走 PR，不直推 main。
 1. 一个任务一个分支(`feat/codex-add-auth-tests` / `chore/codex-review-2c73f6a` 这种命名)
 2. push 分支后开 PR,标题 + 描述按本文档 §4.2 commit message 规范
-3. **PR 主审是 Claude**(`gh pr review --comment`)— 找 bug、对边界、查 7 条铁律
-4. Claude review 完产出一条 summary 评论(必修项 / 建议项 / OK 通过)
-5. **merge 由用户拍板**,Claude 不点 approve,只给意见
-6. merge 进 main 后,CodeX 删自己的分支
+3. PR 不限定审阅者；审阅需找 bug、核对边界与 7 条铁律，并记录结论。
+4. CI 与必要验证通过后，可在用户已授权的交付范围内执行 merge；无需用户亲自点击。
+5. 分支与 worktree 清理仍按交付流程取得具体清单的确认。
 
-涉及第 3 章铁律的 PR,Claude review 至少要明确点过那条编号 — 用户能在 PR 评论里看到痕迹。
+涉及第 3 章铁律的 PR,review 至少要明确点过那条编号 — 用户能在 PR 评论里看到痕迹。
 
 不动 prompt / IA / schema 不经过用户(无论谁动)。
 
@@ -183,8 +182,7 @@ git config user.email "codex@cybermomo.local"
 2. **不动 prompt / IA / schema 不经过用户** — 这三类是产品边界
 3. **不踩对方主场**(看 §5) — 如果非要改,commit message 里说明动机
 4. **review 用文字,不用 emoji 灌水** — 找 bug 比赞美重要
-5. **AI 不互相 approve** — Claude 可以 review CodeX 的 PR(给意见、提问、找 bug),
-   但 **merge 必须用户点**;`gh pr review --approve` 不允许 AI 用
+5. **审阅不限定模型，合并按授权执行** — 不要求 Claude 主审或用户亲自点击 merge；不以 AI 互相 approve 替代必要检查。
 6. **信息流必须经过用户** — 不要 AI 之间私下"达成共识"绕开用户
 
 ---

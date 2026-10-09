@@ -19,6 +19,7 @@ from src.admin.router import router as admin_router
 from src.agent_chat.router import router as agent_chat_router
 from src.agent_self.router import router as agent_self_router
 from src.auth.router import router as auth_router
+from src.auth.email_claim import router as email_claim_router
 from src.human_chat.router import router as chat_router
 from src.match.router import router as match_router
 from src.md.router import router as md_router
@@ -152,6 +153,7 @@ async def timing_middleware(request: Request, call_next):
 # Router 挂载
 # ========================================
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(email_claim_router)
 app.include_router(md_router, prefix="/api/md", tags=["md"])
 app.include_router(match_router, prefix="/api/match", tags=["match"])
 app.include_router(summary_router, prefix="/api/summary", tags=["summary"])

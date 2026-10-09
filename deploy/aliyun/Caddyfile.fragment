@@ -1,0 +1,5 @@
+cybermomo.daydreamer.world {
+    reverse_proxy 127.0.0.1:13010 {
+        flush_interval -1
+    }
+}

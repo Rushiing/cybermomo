@@ -1,0 +1,9 @@
+[Unit]
+Description=CyberMOMO observation sweep every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00 Asia/Shanghai
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=CyberMOMO observation sweep (enable only after Railway cron is disabled)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec -e API_BASE=http://127.0.0.1:8000 cybermomo-prod-backend-1 python scripts/cron_observation_sweep.py
+TimeoutStartSec=10min
+UMask=0077

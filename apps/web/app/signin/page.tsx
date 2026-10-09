@@ -94,6 +94,8 @@ export default function SigninPage() {
         </button>
 
         <p className="text-xs text-ink-tertiary text-center">
+          <Link href="/recover" className="text-primary-dark hover:underline">找回旧 Google 账号</Link>
+          <br />
           还没账号?{" "}
           <Link href="/signup" className="text-primary-dark underline-offset-2 hover:underline">
             去注册
