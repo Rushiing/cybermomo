@@ -1,8 +1,6 @@
 # CyberMOMO production cutover checklist
 
-Authorized 2026-10-09. The user approved merge and production migration after replacing the model key. This is not a completed cutover.
-
-Pre-cutover checkpoint: new model key installed in the rehearsal runtime and inherited by the prepared `/opt/cybermomo-prod` private configuration; actual self-Agent SSE completed and both messages persisted. The independent production PostgreSQL volume is initialized but has not received the final source dump. Railway still serves traffic. DNS and deployment-trigger operations await stable browser control.
+Executed 2026-10-09 after user authorization. Server-side public HTTPS and production backup restore passed. See [production record](PRODUCTION-20261009.md) for evidence and remaining real-user/browser acceptance. The checklist below records the executed scope and rollback requirements.
 
 ## Authorized production scope
 
