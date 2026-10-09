@@ -14,7 +14,7 @@
 
 - **阶段**:MVP 内测前最后冲刺(2026-05-13)
 - **技术栈**:FastAPI(Python 3.11+ async)+ Next.js 14 App Router + Postgres 16 + pgvector + DashScope(OpenAI-compatible)LLM
-- **部署**:Railway backend + frontend + Postgres + observation sweep cron
+- **部署**:阿里云 Pre-RICH 独立 Compose + Postgres + systemd observation timer。Railway 应用已停止，旧数据库保留；见 `deploy/aliyun/PRODUCTION-20261009.md`。
 
 完整结构和本地启动看 `README.md`,不重复。
 
@@ -26,7 +26,7 @@
 
 **内测前加固(5 P0 全闭环)已全部完成、推上线、部署验证通过**(Batch 1 → 3.5b,codex 终审两轮判可上线)。现在在做"开真人内测前"的小 UX 打磨 + Rush 自己走 happy path 自测。
 
-- backend 域名是 `https://cybermomo-production.up.railway.app`，frontend 正式域名是 `https://cybermomo-app.up.railway.app`。上线状态不在文档中固定写 commit；每次交付按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 核对 GitHub merge commit、Railway 运行 commit 和正式域名行为。
+- 正式入口是 `https://cybermomo.daydreamer.world`；API 走同域 `/api`。2026-10-09 迁移状态及验收边界见 [`deploy/aliyun/PRODUCTION-20261009.md`](deploy/aliyun/PRODUCTION-20261009.md)。Railway 旧域名已停用。
 - **内测 ops 三铁规矩 + 档 B 延后清单** 看 [`docs/beta-runbook.md`](docs/beta-runbook.md);审计报告看 [`docs/audit-2026-06.md`](docs/audit-2026-06.md)。
 
 **下一步**:happy path 自测 → 开 ~100 人陆续进的真人内测;继续小 UX 打磨(已知待办:互聊回放话题标签还显示 `matchpoint_3` 这种内部 id,待换人话)。

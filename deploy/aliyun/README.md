@@ -2,7 +2,11 @@
 
 Deadline: user states migration and Railway exit must finish **before 2026-10-20**. This is the user-provided cutoff, not a verified Railway invoice date.
 
-## Live source inventory
+## Current production status
+
+Production cutover completed on 2026-10-09; public HTTPS API checks and production OSS full restore passed. See [production record](PRODUCTION-20261009.md) for exact evidence and outstanding user/browser acceptance. The remaining sections describe historical rehearsal evidence, not the current running topology. Railway database/volume remain retained and billing is not cancelled.
+
+## Historical source inventory
 
 - Railway project `7e623f90-337b-4cf2-a0f1-da260b1abe78`; source commit `6761426fd18e237647feaca9d5a7cae832dbe5e0`.
 - backend, frontend, Postgres and `acceptable-mindfulness` cron (every 30 minutes, `python scripts/cron_observation_sweep.py`). Cron must have exactly one active scheduler after cutover.
