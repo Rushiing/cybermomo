@@ -4,6 +4,7 @@ Prepared 2026-10-09. This is a proposed operation, not a completed cutover.
 
 ## Exact scope requiring production approval
 
+- Before merging this PR, inspect and suspend automatic deploy triggers for the old Railway backend/frontend/cron. Record the previous settings. A merge must not automatically restart the old writer or interrupt a live background pipeline; if deploy triggers cannot be safely suspended, keep the PR draft until the exit sequence is agreed.
 - Railway CyberMOMO only: disable the `acceptable-mindfulness` 30-minute cron; stop old frontend/API writes after active background work drains. Keep Postgres, volume, deployment metadata and configuration for rollback.
 - Export a new PostgreSQL custom dump after the stop-write boundary. Fingerprint every public table with count and canonical full-row content; recheck source is static. The rehearsal dump is not a final migration source.
 - Deploy `/opt/cybermomo-prod` with independent Compose project/database volume. Stop only rehearsal frontend/API to release loopback ports 13010/13011; retain isolated databases/evidence. Never overwrite the production DB or a retained volume.
