@@ -14,8 +14,14 @@
 
 ## Outstanding acceptance and exit
 
-The local browser encountered an enterprise security interstitial and was handed to the user. Real-user old-account recovery/history on the formal domain and normal-network/mobile acceptance remain pending. The recovery flow already passed isolated SMTP/database/browser rehearsal; no additional email was sent during cutover. Google OAuth callback/connectivity is not verified; old Google-only accounts use the approved original-email recovery path.
+The user confirmed old-account login and historical records on the new site on 2026-10-09. This closes that user acceptance item; the earlier enterprise browser interstitial is no longer an outstanding user-access blocker. Do not infer mobile-network or Google OAuth acceptance from this feedback. Google OAuth callback/connectivity remains unverified; Google-only accounts have the approved original-email recovery path.
 
-Both applications require observation and user acceptance before final Railway resource/plan cleanup. Inventory the exact retained databases/volumes and obtain concrete cleanup approval; user deadline is before 2026-10-20. Do not represent retained Railway resources as billing cancellation.
+Both applications have user-confirmed old-account/history acceptance. Final Railway exit awaits the 2026-10-10 scheduled backup/readback checks, observation, and approval of the exact resource deletion list. Inventory the exact retained databases/volumes and obtain concrete cleanup approval; user deadline is before 2026-10-20. Do not represent retained Railway resources as billing cancellation.
 
 After target writes begin, rollback requires target stop-write, fresh backup and data reconciliation; never simply reopen the stale Railway database. See CUTOVER.md.
+
+## Railway exit checkpoint — 2026-10-09
+
+Live billing API: HOBBY / ACTIVE; current billing period ends 2026-10-24 15:23:24 Asia/Shanghai. This is not an exact charge-time promise. Keep the user deadline before October 20. Both projects retain one running Postgres service and one volume; application services are stopped. QuestionOS backend/frontend/smoke-monitor GitHub triggers were additionally disconnected and verified empty on October 9. Database/volume deletion and subscription cancellation have not happened. Past accrued charges may still settle.
+
+Scheduled backups: QuestionOS 04:15, CyberMOMO 04:35 Asia/Shanghai, each with up to 120 seconds jitter. Inspect service result, last-success, OSS readback and restore evidence; do not treat the next-run timestamp as success. There is no automatic Railway deletion/cancellation scheduled.

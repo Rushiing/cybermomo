@@ -12,26 +12,18 @@
 
 **CyberMOMO** — AI 先行社交平台。"先聊的不是你" — Agent 替你做社交初筛,把真正有意思的人类还给人类。
 
-- **阶段**:MVP 内测前最后冲刺(2026-05-13)
-- **技术栈**:FastAPI(Python 3.11+ async)+ Next.js 14 App Router + Postgres 16 + pgvector + DashScope(OpenAI-compatible)LLM
+- **技术栈**:FastAPI(Python 3.11+ async)+ Next.js 14 App Router + 生产 PostgreSQL 18.6 + pgvector + DashScope(OpenAI-compatible)LLM
 - **部署**:阿里云 Pre-RICH 独立 Compose + Postgres + systemd observation timer。Railway 应用已停止，旧数据库保留；见 `deploy/aliyun/PRODUCTION-20261009.md`。
 
 完整结构和本地启动看 `README.md`,不重复。
 
 ---
 
-## 2. 当前节点(2026-07-15)
+## 2. 现役入口
 
-> 📍 **最新进展 + 无缝衔接,读 [`docs/handoff-2026-06-26.md`](docs/handoff-2026-06-26.md)** —— 本节是它的摘要。
-
-**内测前加固(5 P0 全闭环)已全部完成、推上线、部署验证通过**(Batch 1 → 3.5b,codex 终审两轮判可上线)。现在在做"开真人内测前"的小 UX 打磨 + Rush 自己走 happy path 自测。
-
-- 正式入口是 `https://cybermomo.daydreamer.world`；API 走同域 `/api`。2026-10-09 迁移状态及验收边界见 [`deploy/aliyun/PRODUCTION-20261009.md`](deploy/aliyun/PRODUCTION-20261009.md)。Railway 旧域名已停用。
-- **内测 ops 三铁规矩 + 档 B 延后清单** 看 [`docs/beta-runbook.md`](docs/beta-runbook.md);审计报告看 [`docs/audit-2026-06.md`](docs/audit-2026-06.md)。
-
-**下一步**:happy path 自测 → 开 ~100 人陆续进的真人内测;继续小 UX 打磨(已知待办:互聊回放话题标签还显示 `matchpoint_3` 这种内部 id,待换人话)。
-
-> 冷启动 5 件事(2026-05-13)已全部合入,历史细节见 git log / 旧版本本节。
+- 正式入口、迁移验收与 Railway 退出状态，以 [`deploy/aliyun/PRODUCTION-20261009.md`](deploy/aliyun/PRODUCTION-20261009.md) 为准。
+- 运维与发布按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md)。旧交接记录仅用于历史追溯，不作为新任务清单。
+- 产品内测约束见 [`docs/beta-runbook.md`](docs/beta-runbook.md)；旧 Railway 命令必须按当前部署入口核对后使用。
 
 **不要碰的区域**(除非被明确指派):
 - `legacy/prototype-v0.4/` — 盲测期遗弃代码,只读不动
@@ -89,7 +81,7 @@
 
 不动 prompt / IA / schema 不经过用户(无论谁动)。
 
-跨 service 部署:api 在 repo root 的 `Dockerfile`,web 在 `apps/web/Dockerfile`,Railway 各拉各的。
+生产镜像与 Compose 以 `deploy/aliyun/` 为准；Git 合并不等于已部署。旧 Railway 自动发布已断开，不得无意恢复。
 
 ### 4.2 · Commit message
 - **必带"为什么"**,不只写"加了 X"
@@ -101,7 +93,7 @@
 
 每个 AI 协作者在自己的工作环境里跑一次:
 
-**Claude**(直推 main):
+**Claude**(同样走 PR):
 ```bash
 git config user.name "xihe"
 git config user.email "<用户的 git email>"
@@ -169,10 +161,10 @@ git config user.email "codex@cybermomo.local"
 
 ## 6. 标准交付入口
 
-- 任务边界、风险分级、分支/worktree、本地验证、PR、Railway 和线上验收统一按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 执行。
+- 任务边界、风险分级、分支/worktree、本地验证、PR、阿里云部署和线上验收统一按 [`docs/delivery-runbook.md`](docs/delivery-runbook.md) 执行。
 - 低/中/高风险定义以 runbook 为准。登录/OAuth、生产数据、migration、Agent/Summary 核心 Prompt、Voice Audit 写入、单轮/批量重跑、admin 权限是高风险，必须人工确认。
 - CI 只跑稳定、便宜、可重复的任务/风险 gate、API 测试和 Web 检查。真实模型、真实账号和生产数据验收不进基础 CI。
-- merge 后使用 GitHub Actions 的 `Production smoke` 记录 Railway 证据并验证正式域名；真实账号、模型质量、Voice Audit 和生产写操作仍走人工确认。
+- 线上验收记录实际镜像摘要与正式域名行为。旧 `Production smoke` workflow 仍面向 Railway，属于退役工具，不可用于证明阿里云健康；按交付 runbook 在 Pre-RICH 执行现有只读 smoke。
 
 ---
 

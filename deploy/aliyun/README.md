@@ -4,7 +4,7 @@ Deadline: user states migration and Railway exit must finish **before 2026-10-20
 
 ## Current production status
 
-Production cutover completed on 2026-10-09; public HTTPS API checks and production OSS full restore passed. See [production record](PRODUCTION-20261009.md) for exact evidence and outstanding user/browser acceptance. The remaining sections describe historical rehearsal evidence, not the current running topology. Railway database/volume remain retained and billing is not cancelled.
+Production cutover completed on 2026-10-09; public HTTPS API checks and production OSS full restore passed. See [production record](PRODUCTION-20261009.md) for exact evidence and remaining scheduled-backup observation and Railway exit. The remaining sections describe historical rehearsal evidence, not the current running topology. Railway database/volume remain retained and billing is not cancelled.
 
 ## Historical source inventory
 
@@ -48,12 +48,12 @@ Verified on 2026-10-09:
 - Broader synthetic workflow: 1 match completed, 6 hooks, 6 Agent chat messages, 2 host summaries. Authenticated summary list and chat replay returned the correct host-scoped result.
 - Dedicated RAM user `cybermomo-backup`, custom policy `CyberMOMOBackupPrefixAccess`: only ListObjects on cybermomo/ and PutObject/GetObject on cybermomo/*; no console login or delete permission. Runtime list test allowed cybermomo/ and denied questionos/. Credentials exist only in `/opt/cybermomo-backup/ossutil.conf` (0600); both temporary downloaded CSV copies were removed after exact server readback.
 - First OSS backup succeeded at 2026-10-09T07:14:34Z. Upload uses AES256 and forbid-overwrite; downloaded archive matched byte-for-byte. Full restore into `cybermomo_oss_verify` matched all 24 table row counts and complete content fingerprints. This is same-region off-host backup.
-- `cybermomo-backup.timer` enabled, every day 04:35 Asia/Shanghai plus up to 120 seconds jitter; next observed run 2026-10-10 04:36:10 CST. It currently backs up the rehearsal snapshot. Final cutover must repoint it to the production container and validate a production backup.
+- `cybermomo-backup.timer` enabled, every day 04:35 Asia/Shanghai plus up to 120 seconds jitter; next observed run 2026-10-10 04:36:10 CST. At that rehearsal checkpoint it backed up the rehearsal snapshot. Final cutover must repoint it to the production container and validate a production backup.
 - Recovery migration was also applied to an independent restored DB; the 23 original data tables remained content-identical, with only the new claim table and expected Alembic revision change. Observation cron ran once against synthetic acceptance DB and scheduled zero jobs.
 - Source snapshot has 7 Google-only users, all 7 have unique normalized emails and no preexisting usernames, so the approved recovery path covers this cohort.
 - Existing QuestionOS public homepage 200, unauthenticated auth endpoint 401; Caddy, newrich-real and newrich-synthetic services remain active.
 
-Pending: formal-domain HTTPS/legacy recovery acceptance, old scheduler drain and final data synchronization. See [CUTOVER.md](CUTOVER.md) for the concrete approval scope and rollback boundary. Public Google OAuth callback is not yet configured/verified; the approved email path avoids reliance on Google connectivity.
+At the rehearsal checkpoint, formal-domain HTTPS/legacy recovery acceptance, old scheduler drain and final synchronization were pending; the current completed status is in the production record. See [CUTOVER.md](CUTOVER.md) for the concrete approval scope and rollback boundary. Public Google OAuth callback is not yet configured/verified; the approved email path avoids reliance on Google connectivity.
 
 Rehearsal dump SHA256: `d2025bae9be7cc0deaa8b54eaa069dc279a9bee697d034b3f67fcd6657fa6ed1`, 1,937,091 bytes. Private source evidence: `~/.config/cybermomo/migration-20261009/`.
 

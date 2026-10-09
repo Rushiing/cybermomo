@@ -1,5 +1,6 @@
 # CodeX Onboarding · 第一批任务(2026-05-13)
 
+> 历史材料：不作为现役部署或未完成任务依据。当前入口见 [生产迁移记录](../deploy/aliyun/PRODUCTION-20261009.md)。
 > 欢迎接入 CyberMOMO 项目。先看 [`AGENTS.md`](../AGENTS.md) 全文,这里是你第一批要做的活的详细 brief。
 >
 > 完成顺序:**先 B 后 A**(B 是 review 工作能让你先读懂代码再动手写测试)。

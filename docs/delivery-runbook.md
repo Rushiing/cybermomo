@@ -1,6 +1,6 @@
 # CyberMOMO 交付流程
 
-> 适用于个人开发 + Codex Agent 协作。Git 与已验收的 Railway 状态是 truth；Agent 记忆只是派生信息。
+> 适用于个人开发 + Codex Agent 协作。Git、实际运行镜像与已验收的阿里云入口是 truth；Agent 记忆只是派生信息。
 
 ## 1. 开工前
 
@@ -51,49 +51,38 @@ NEXT_PUBLIC_DEV_MOCK_AUTH=false npm run build
 
 GitHub `main` 必须保持以下保护：只允许 PR 合入、三项基础检查 required、分支必须最新、conversation 必须解决、线性历史、禁止 force push 和删除。个人仓库不增加 CODEOWNERS 或强制 approve 数量；它们不能替代用户对中高风险任务的判断。
 
-## 5. Railway 部署
+## 5. 阿里云部署
 
-merge 后记录 merge commit、受影响服务、Railway deployment ID 与实际运行 commit。含 migration 的发布属于高风险，必须先确认兼容性、备份和回滚方案。
+以 `deploy/aliyun/PRODUCTION-20261009.md` 和实际运行配置为准。生产位于 Pre-RICH `/opt/cybermomo-prod`，Compose 项目 `cybermomo-prod`；模型与邮件凭据仅在私有环境文件中。记录代码版本、镜像 ID、迁移和回滚材料，不把 merge 当成 deploy。
 
-Railway watch paths 必须保持服务隔离：backend 与 observation cron 只因 `apps/api`、根 Dockerfile 或根 Railway 配置变化而部署，frontend 只因 `apps/web` 变化而部署。纯文档、GitHub workflow 和只读交付脚本不应触发业务服务重建。
-
-读 Railway 配置时只查询需要的非敏感字段。禁止导出或打印整份 production variables/config，禁止在日志、PR、文档或 Agent 记忆中写入 secret。
+仅在明确授权的发布范围内更新生产；重建 backend 后重启 frontend 刷新代理连接。保留 QuestionOS、NewRICH、Caddy 其他路由。旧 Railway 应用和发布触发器已停止；恢复旧站必须先处理切换后的新写入，不能直接打开旧库。
 
 ## 6. 部署后正式验收
 
-Railway 显示绿色不等于产品可用。至少验证：
+分别验证容器健康、正式 HTTPS、同域匿名鉴权 401，再验证授权账号的登录/刷新/历史与本次受影响路径。Google 跳转成功不等于国内 OAuth 可用。真实模型和移动网络按实际测试范围报告。
 
-1. `https://cybermomo-production.up.railway.app/healthz` 返回 200。
-2. `https://cybermomo-app.up.railway.app/` 能打开并正常渲染。
-3. frontend 同域 `/api/auth/me` 能连到 backend，未登录时返回预期 401。
-4. 涉及用户路径时，用授权的测试账号验证实际页面行为。
-5. OAuth 任务必须验证 Google 跳转、callback、session、登出和新旧用户落地页。
-6. 对中国用户可用性有要求时，使用真实移动 4G/5G 再验收；不用 Railway service status 代替。
+### 6.1 现有只读 smoke 的执行位置
 
-真实模型效果、Voice Audit 和生产数据验收只能作为按需工作流或人工验收，不作为基础 CI gate。
-
-### 6.1 自动化只读 smoke
-
-本地或 CI 均使用同一脚本：
+在 Pre-RICH 上运行仓库脚本，明确覆盖旧 Railway 默认值：
 
 ```bash
-python3 scripts/production_smoke.py --check-oauth-redirect
+python3 scripts/production_smoke.py \
+  --frontend-url https://cybermomo.daydreamer.world \
+  --backend-url http://127.0.0.1:13011
 ```
 
-脚本只验证 backend health、frontend HTML、同域 `/api/auth/me` 和可选的 Google redirect/state cookie，不选择真实账号、不调用真实模型、不写生产数据。
-
-merge 并确认 Railway 部署完成后，在 GitHub Actions 手动运行 `Production smoke`。输入受影响服务、Railway deployment ID 或 dashboard 证据引用；workflow summary 和 30 天 artifact 是该次发布的验收记录。脚本通过不等于 Railway commit 已匹配，运行人仍须先从 Railway 确认实际运行 commit。
+该命令检查内部 backend health、正式前端 HTML、同域 `/api/auth/me`，不调用模型或写入数据。脚本中的默认 URL 与 GitHub `Production smoke` workflow 仍是旧 Railway 路径，标为待迁移的运维工具；不要直接使用无参数命令，也不要把旧 workflow 结果当作现役健康凭证。本次知识收尾不修改应用和 CI 执行逻辑。
 
 ### 6.2 必须人工的验收
 
 - 登录/OAuth：真实账号 callback、session、登出、新旧用户落地页。
 - Agent Chat/Summary/核心 Prompt：授权测试账号 + 真实模型质量。
-- Voice Audit、单轮/批量重跑、生产数据/admin 写操作：动作前和执行前两次确认，并记录范围、恢复方案和结果。
+- Voice Audit、单轮/批量重跑、生产数据/admin 写操作：须有覆盖具体动作与目标的用户授权，范围未变不重复确认，并记录范围、恢复方案和结果。
 - 中国移动网络：确有可用性要求时由真人使用 4G/5G 验证，并把结果写入 workflow input 或 PR。
 
 ## 7. Truth sync 与清理
 
-验收通过后再同步 README、AGENTS.md、runbook 和必要的 Agent 记忆。记忆必须标明已验证的 commit/部署事实，不得包含 secret 或用户数据。
+验收通过后再同步 README、AGENTS.md、runbook ；Agent 记忆仅在用户明确要求且宿主允许时更新。记忆必须标明已验证的 commit/部署事实，不得包含 secret 或用户数据。
 
 用户确认任务完成后，再删除远程/本地分支、worktree 和临时资源；高风险任务保留必要的验收和回滚记录。
 

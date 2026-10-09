@@ -1,5 +1,6 @@
 # Fly.io 迁移 runbook(Railway → Fly hkg)
 
+> 历史材料：不作为现役部署或未完成任务依据。当前入口见 [生产迁移记录](../deploy/aliyun/PRODUCTION-20261009.md)。
 > 状态:**草稿,等 user 给 flyctl token / 装 CLI 后开始**
 >
 > 账号:`wei.zhouw@gmail.com`(Fly.io)
