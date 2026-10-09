@@ -13,7 +13,7 @@
 高风险任务：
 
 - [ ] 用户已确认任务边界
-- [ ] 部署或生产操作前需再次人工确认
+- [ ] 部署或生产操作已有覆盖具体动作与目标的用户授权
 - [ ] 已写明回滚/恢复方案
 
 ## 变更与验证
@@ -26,7 +26,7 @@
 
 - 影响服务：[ ] 无 [ ] backend [ ] frontend [ ] cron [ ] Postgres
 - 是否包含 migration：[ ] 否 [ ] 是
-- [ ] Railway 运行 commit 与 merge commit 一致
+- [ ] 已核对阿里云运行镜像/构建来源与发布版本；纯文档变更不要求重部署
 - [ ] backend `/healthz` 正常
 - [ ] frontend 正式域名可达且页面正常
 - [ ] frontend 同域 `/api` 可连接 backend

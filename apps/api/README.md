@@ -1,6 +1,6 @@
 # CyberMOMO API
 
-FastAPI 后端,部署到 Railway。
+FastAPI 后端，现部署于阿里云 Pre-RICH。现役入口与验收见 [迁移记录](../../deploy/aliyun/PRODUCTION-20261009.md)。
 
 ## 模块结构
 

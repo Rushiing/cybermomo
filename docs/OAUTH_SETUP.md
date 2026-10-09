@@ -3,7 +3,7 @@
 部署完代码后,要让 "用 Google 登录" 真的工作,需要做两件事:
 
 1. 在 Google Cloud Console 建一个 OAuth 2.0 Client
-2. 在 Railway 把 client_id / client_secret + 几个相关 env 配上
+2. 在阿里云私有运行配置中把 client_id / client_secret + 几个相关 env 配上
 
 ## 1. Google Cloud Console
 
@@ -22,38 +22,33 @@
    - Name: `cybermomo-prod`
    - **Authorized redirect URIs** 加:
      ```
-     https://cybermomo-app.up.railway.app/api/auth/google/callback
+     https://cybermomo.daydreamer.world/api/auth/google/callback
      ```
      (如果还要本地开发,再加一行 `http://localhost:8080/api/auth/google/callback`)
    - 创建后会拿到 **Client ID** 和 **Client Secret** — 复制存好
 
-## 2. Railway · api service 环境变量
+## 2. 阿里云 backend 私有环境变量
 
-打开 Railway api service → Variables tab,加 / 改这几个:
+在已授权配置变更范围内维护 `/opt/cybermomo-prod/backend.env`，不要输出凭据值；以下是 OAuth 配置参考，不表示国内 Google 登录已经验收。
 
 | 变量 | 值 | 说明 |
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | `xxx.apps.googleusercontent.com` | 上一步拿到的 |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | `GOCSPX-xxx` | 上一步拿到的 |
-| `GOOGLE_OAUTH_REDIRECT_URI` | `https://cybermomo-app.up.railway.app/api/auth/google/callback` | 跟 Google Console 那行完全一致 |
-| `WEB_BASE_URL` | `https://cybermomo-app.up.railway.app` | 前端域名 |
+| `GOOGLE_OAUTH_REDIRECT_URI` | `https://cybermomo.daydreamer.world/api/auth/google/callback` | 跟 Google Console 那行完全一致 |
+| `WEB_BASE_URL` | `https://cybermomo.daydreamer.world` | 前端域名 |
 | `JWT_SECRET` | `openssl rand -hex 32` 生成 | **必填**,session JWT 签名密钥 |
 | `ENV` | `prod` | 关掉 dev mock fallback;cookie auth 唯一通路 |
 
-## 3. Railway · web service 环境变量
+## 3. 前端同域代理
 
-| 变量 | 值 | 说明 |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://cybermomo-production.up.railway.app` | 已有,确认 |
-| `NEXT_PUBLIC_DEV_MOCK_AUTH` | `false` | **关掉 DEV banner + mock 头** — 否则用户也能切 mock user 假装登录 |
+浏览器使用相对 `/api`，构建时 `NEXT_PUBLIC_DEV_MOCK_AUTH=false`，服务端代理指向 Compose backend。不要重新设置已停用的 Railway API 域名。旧 Google-only 用户可使用 `/recover` 验证原邮箱并保留原账号及历史。
 
-注:`NEXT_PUBLIC_*` 是 build-time 注入的,改了之后 web service 要 **Redeploy**(从 Settings 顶上 ... 菜单)才生效。
-
-## 4. 验证
+## 4. Google OAuth 专项验收（尚未完成）
 
 部署完后:
 
-- 浏览器访问 `https://cybermomo-app.up.railway.app/`
+- 浏览器访问 `https://cybermomo.daydreamer.world/`
 - 应该看到"用 Google 登录"按钮**可点**(不再灰)、左下角 DEV banner **消失**
 - 点 Google 登录 → 跳到 Google 同意页 → 选账户 → 同意 → 跳回 `/room`(老用户)或 `/onboarding`(新用户)
 - 进 `/me` → 设置区 → "退出登录" 点两下 → 跳回 `/`,再访问 `/room` 应该 401 跳回登录页
