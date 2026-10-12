@@ -10,8 +10,10 @@
 #
 # 关键:NEXT_PUBLIC_* 必须在 BUILD 时就有,Next.js 会 bake 进 client bundle。
 # Railway service Variables 在 Dockerfile build 阶段可用,所以这块没问题。
-# API_PROXY_TARGET 给 Next rewrites 用,线上指向后端内网地址,避免浏览器直连
-# backend 公网域名抖动 / CORS 问题。
+# API_PROXY_TARGET 给 Next rewrites 用,线上指向后端内网地址或 API 公网地址,
+# 避免浏览器直连 backend 公网域名抖动 / CORS 问题。
+# 生产不要设置 NEXT_PUBLIC_API_CLIENT_BASE;OAuth callback 应配置为 web 同域
+# /api/auth/google/callback,让 state/session cookie 都落在 web 域名。
 
 FROM node:20-alpine AS deps
 WORKDIR /app
