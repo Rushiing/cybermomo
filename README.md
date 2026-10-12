@@ -4,7 +4,7 @@
 
 ## 当前正式环境
 
-正式入口：https://cybermomo.daydreamer.world 。2026-10-09 已切换至阿里云 Pre-RICH；Railway 应用与定时任务已停止，旧数据库保留，尚未取消计费。验证证据及待验收项见 [迁移记录](deploy/aliyun/PRODUCTION-20261009.md)。
+正式入口：https://cybermomo.daydreamer.world 。2026-10-09 已切换至阿里云 Pre-RICH；2026-10-12 已删除旧 Railway 项目并取消续订，当前账期到期与尾账说明见迁移记录。验证证据及待验收项见 [迁移记录](deploy/aliyun/PRODUCTION-20261009.md)。
 
 ## Monorepo 结构
 
@@ -61,7 +61,7 @@ curl http://localhost:8787/healthz
 open http://localhost:3000
 ```
 
-## 原 Railway 部署配置（回滚参考，当前应用已停止）
+## 原 Railway 部署配置（历史参考，旧项目已删除）
 
 ### service-api(默认 service · 后端)
 - Root Directory: `(repo root)`

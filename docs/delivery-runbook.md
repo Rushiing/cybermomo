@@ -55,7 +55,7 @@ GitHub `main` 必须保持以下保护：只允许 PR 合入、三项基础检�
 
 以 `deploy/aliyun/PRODUCTION-20261009.md` 和实际运行配置为准。生产位于 Pre-RICH `/opt/cybermomo-prod`，Compose 项目 `cybermomo-prod`；模型与邮件凭据仅在私有环境文件中。记录代码版本、镜像 ID、迁移和回滚材料，不把 merge 当成 deploy。
 
-仅在明确授权的发布范围内更新生产；重建 backend 后重启 frontend 刷新代理连接。保留 QuestionOS、NewRICH、Caddy 其他路由。旧 Railway 应用和发布触发器已停止；恢复旧站必须先处理切换后的新写入，不能直接打开旧库。
+仅在明确授权的发布范围内更新生产；重建 backend 后重启 frontend 刷新代理连接。保留 QuestionOS、NewRICH、Caddy 其他路由。旧 Railway 项目已删除，不能直接重启或选择旧 deployment 回滚。恢复必须先停止受影响的新写入、备份并核对最新数据，再在独立目标恢复归档；不得覆盖生产库。
 
 ## 6. 部署后正式验收
 

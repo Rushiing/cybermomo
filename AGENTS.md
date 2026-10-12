@@ -13,7 +13,7 @@
 **CyberMOMO** — AI 先行社交平台。"先聊的不是你" — Agent 替你做社交初筛,把真正有意思的人类还给人类。
 
 - **技术栈**:FastAPI(Python 3.11+ async)+ Next.js 14 App Router + 生产 PostgreSQL 18.6 + pgvector + DashScope(OpenAI-compatible)LLM
-- **部署**:阿里云 Pre-RICH 独立 Compose + Postgres + systemd observation timer。Railway 应用已停止，旧数据库保留；见 `deploy/aliyun/PRODUCTION-20261009.md`。
+- **部署**:阿里云 Pre-RICH 独立 Compose + Postgres + systemd observation timer。Railway 旧项目已删除；现役运维与恢复边界见 `deploy/aliyun/PRODUCTION-20261009.md`。
 
 完整结构和本地启动看 `README.md`,不重复。
 
@@ -81,7 +81,7 @@
 
 不动 prompt / IA / schema 不经过用户(无论谁动)。
 
-生产镜像与 Compose 以 `deploy/aliyun/` 为准；Git 合并不等于已部署。旧 Railway 自动发布已断开，不得无意恢复。
+生产镜像与 Compose 以 `deploy/aliyun/` 为准；Git 合并不等于已部署。旧 Railway 项目已退役，不得按历史配置重新创建服务或调度。
 
 ### 4.2 · Commit message
 - **必带"为什么"**,不只写"加了 X"

@@ -1,10 +1,10 @@
 # CyberMOMO Alibaba Cloud migration · 2026-10-09
 
-Deadline: user states migration and Railway exit must finish **before 2026-10-20**. This is the user-provided cutoff, not a verified Railway invoice date.
+Railway exit completed on **2026-10-12**, before the user-provided October 20 deadline.
 
 ## Current production status
 
-Production cutover completed on 2026-10-09; public HTTPS API checks and production OSS full restore passed. See [production record](PRODUCTION-20261009.md) for exact evidence and remaining scheduled-backup observation and Railway exit. The remaining sections describe historical rehearsal evidence, not the current running topology. Railway database/volume remain retained and billing is not cancelled.
+Production cutover completed on 2026-10-09; public HTTPS API checks and production OSS full restore passed. See [production record](PRODUCTION-20261009.md) for current exit, backup and billing evidence. Both old Railway projects were deleted and renewal cancelled on October 12. The remaining sections describe historical rehearsal evidence, not the current running topology.
 
 ## Historical source inventory
 
@@ -61,4 +61,4 @@ QuestionOS OSS credential is limited to `questionos/`; do not reuse it for Cyber
 
 ## Cutover gate
 
-Once rehearsal passes: present exact stop/drain/final-sync/DNS/HTTPS/cron/backup changes and rollback plan for cutover approval. Retain Railway DB/volume until both migrations are accepted and cleanup list is explicitly approved. No Railway cancellation or deletion during rehearsal.
+Historical rehearsal gate: cutover and later deletion required separate approval. Both were subsequently executed; use the production record for the completed state, not this rehearsal checklist.
