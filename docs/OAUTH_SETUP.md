@@ -62,3 +62,17 @@
 - `JWT_SECRET` 泄漏 = 任意伪造登录态。换的话所有用户立刻被踢下线
 - `GOOGLE_OAUTH_CLIENT_SECRET` 泄漏 = 别人能假冒我们的 OAuth 客户端。Google Console 上可以 Rotate
 - OAuth consent screen 发布前(Testing 状态)只有 Test Users 列表里的账户能登,Verification 通过后才放开;朋友测试期可以保留 Testing,过完体验直接加他们邮箱
+
+## 同域代理排查
+
+浏览器 API 请求与 OAuth callback 均应走前端同域 `/api`，再由 Next rewrites 转发到后端。生产不要设置 `NEXT_PUBLIC_API_CLIENT_BASE`；否则 state cookie 和回调可能落在不同域名，出现 `state_mismatch`。
+
+完整本地联调优先使用 `http://localhost:3000/api/auth/google/callback`，由前端代理到本地 API；直接调试后端时才使用 8080 回调。
+
+检查正式登录入口返回的 `Location`：
+
+```sh
+curl -sS -D - -o /dev/null https://cybermomo.daydreamer.world/api/auth/google/login
+```
+
+其中 `redirect_uri` 应指向 `https://cybermomo.daydreamer.world/api/auth/google/callback`。若仍为旧 Railway 域名，核对现役私有运行配置及实际进程；修改或重启生产前按发布流程执行。响应跳转正确不等于真实 Google 登录已通过。
