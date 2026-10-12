@@ -1,6 +1,6 @@
 # CyberMOMO production cutover checklist
 
-Executed 2026-10-09 after user authorization. Server-side public HTTPS and production backup restore passed. See [production record](PRODUCTION-20261009.md) for evidence and remaining real-user/browser acceptance. The checklist below records the executed scope and rollback requirements.
+Executed 2026-10-09 after user authorization. Server-side public HTTPS and production backup restore passed. Railway exit subsequently completed on 2026-10-12. See [production record](PRODUCTION-20261009.md) for current evidence and recovery boundaries. The checklist below is historical; it does not authorize recreating retired Railway resources.
 
 ## Authorized production scope
 
@@ -23,10 +23,10 @@ Executed 2026-10-09 after user authorization. Server-side public HTTPS and produ
 - Google OAuth from the new domain is not yet verified; approved original-email recovery is the domestic alternative. Do not present Google sign-in as working until redirect registration and server exchange are verified.
 - Confirm observation scheduler uniqueness, backup last-success and restore evidence, host resources, QuestionOS and NewRICH availability.
 
-## Rollback
+## Historical rollback before Railway exit
 
 Before target receives writes: stop target API/cron, restore previous Caddy/DNS routing as appropriate, restart retained Railway API/frontend/cron; verify old data fingerprint and live paths.
 
 After target receives writes: do not just reopen the old DB. Stop new writes/cron, back up and reconcile target changes, restore a consistent current copy to the selected source, then reopen one writer and one scheduler. Returning DNS without data reconciliation would lose new activity.
 
-No Railway database/volume deletion or billing cancellation is part of this cutover. After both applications pass observation and user acceptance, inventory exact retained services/resources and billing plan, obtain cleanup approval for the concrete list, then verify removal before the user-provided 2026-10-20 deadline.
+The October 9 cutover did not authorize database/volume deletion. The user separately approved the exact exit list on October 12; both old projects were deleted and renewal cancelled. The retained-Railway rollback above is no longer available; follow the current production record for archive-based recovery.
